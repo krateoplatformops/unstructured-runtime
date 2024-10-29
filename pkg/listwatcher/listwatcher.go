@@ -16,12 +16,7 @@ const (
 	CompositionVersionLabel = "krateo.io/composition-version"
 )
 
-type Selectors struct {
-	LabelSelector *string
-	FieldSelector *string
-}
-
-type CreateOptions struct {
+type CreateOption struct {
 	Client        dynamic.Interface
 	Discovery     discovery.DiscoveryInterface
 	GVR           schema.GroupVersionResource
@@ -30,7 +25,7 @@ type CreateOptions struct {
 	Namespace     string
 }
 
-func Create(opts CreateOptions) (*cache.ListWatch, error) {
+func Create(opts CreateOption) (*cache.ListWatch, error) {
 	return &cache.ListWatch{
 		ListFunc: func(lo metav1.ListOptions) (runtime.Object, error) {
 			if opts.LabelSelector != nil {

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -9,6 +10,8 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/restmapper"
+	"k8s.io/gengo/namer"
+	"k8s.io/gengo/types"
 )
 
 type UpdateOptions struct {
@@ -57,4 +60,16 @@ func GVKtoGVR(dc discovery.DiscoveryInterface, gvk schema.GroupVersionKind) (sch
 	}
 
 	return mapping.Resource, nil
+}
+
+func InferGVKtoGVR(gvk schema.GroupVersionKind) schema.GroupVersionResource {
+	kind := types.Type{Name: types.Name{Name: gvk.Kind}}
+	namer := namer.NewPrivatePluralNamer(nil)
+	resource := strings.ToLower(namer.Name(&kind))
+
+	return schema.GroupVersionResource{
+		Group:    gvk.Group,
+		Version:  gvk.Version,
+		Resource: resource,
+	}
 }

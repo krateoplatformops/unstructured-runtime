@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -31,6 +30,11 @@ const (
 	reasonReconciliationFailed eventrec.Reason = "ReconciliationFailed"
 )
 
+type ListWatcherConfiguration struct {
+	LabelSelector *string
+	FieldSelector *string
+}
+
 type Options struct {
 	Client         dynamic.Interface
 	Discovery      discovery.DiscoveryInterface
@@ -40,6 +44,7 @@ type Options struct {
 	Recorder       eventrec.Recorder
 	Logger         logging.Logger
 	ExternalClient ExternalClient
+	ListWatcher    ListWatcherConfiguration
 }
 
 type Controller struct {
@@ -47,7 +52,6 @@ type Controller struct {
 	discoveryClient discovery.DiscoveryInterface
 	gvr             schema.GroupVersionResource
 	queue           workqueue.TypedRateLimitingInterface[Event]
-	items           *sync.Map
 	informer        cache.Controller
 	recorder        eventrec.Recorder
 	logger          logging.Logger
@@ -63,13 +67,14 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 
 	queue := workqueue.NewTypedRateLimitingQueue(rateLimiter)
 	workqueue.NewTypedRateLimitingQueueWithConfig(rateLimiter, workqueue.TypedRateLimitingQueueConfig[Event]{})
-	items := sync.Map{}
 
-	lw, err := listwatcher.Create(listwatcher.CreateOptions{
-		Discovery: opts.Discovery,
-		Client:    opts.Client,
-		GVR:       opts.GVR,
-		Namespace: opts.Namespace,
+	lw, err := listwatcher.Create(listwatcher.CreateOption{
+		Client:        opts.Client,
+		Discovery:     opts.Discovery,
+		GVR:           opts.GVR,
+		LabelSelector: opts.ListWatcher.LabelSelector,
+		FieldSelector: opts.ListWatcher.FieldSelector,
+		Namespace:     opts.Namespace,
 	})
 	if err != nil {
 		opts.Logger.Debug("Failed to create listwatcher.")
@@ -105,19 +110,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						Namespace:  el.GetNamespace(),
 					},
 				}
-				dig := digestForEvent(item)
-
-				if _, exists := items.Load(dig); exists {
-					opts.Logger.Debug("AddFunc: item already exists in the queue.")
-					return
-				}
-
-				if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-					queue.AddRateLimited(item)
-					// fmt.Println("Queueing Add event")
-					// fmt.Println("Queue length: ", queue.Len())
-					// fmt.Println("Queue elements: ", queue)
-				}
+				queue.AddRateLimited(item)
 			},
 			UpdateFunc: func(old, new interface{}) {
 				oldUns, ok := old.(*unstructured.Unstructured)
@@ -161,18 +154,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 							Name:       newUns.GetName(),
 							Namespace:  newUns.GetNamespace(),
 						}}
-					dig := digestForEvent(item)
-
-					if _, exists := items.Load(dig); exists {
-						opts.Logger.Debug("UpdaeteFunc: item already exists in the queue.")
-						return
-					}
-					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-						queue.AddRateLimited(item)
-						// fmt.Println("Queueing update event")
-						// fmt.Println("Queue length: ", queue.Len())
-						// fmt.Println("Queue elements: ", queue)
-					}
+					queue.AddRateLimited(item)
 				} else {
 					item := Event{
 						Id:        id,
@@ -184,22 +166,8 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 							Namespace:  newUns.GetNamespace(),
 						},
 					}
-					dig := digestForEvent(item)
 
-					// fmt.Println("Dig: ", dig)
-
-					if _, exists := items.Load(dig); exists {
-						opts.Logger.Debug("UpdateFunc: item already exists in the queue - (observe)")
-						return
-					}
-
-					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-						queue.AddAfter(item, opts.ResyncInterval)
-						// fmt.Println("Queueing after", opts.ResyncInterval, "observe event")
-						// fmt.Println("Queueing observe event - (observe)")
-						// fmt.Println("Queue length: ", queue.Len())
-						// fmt.Println("Queue elements: ", queue)
-					}
+					queue.AddAfter(item, opts.ResyncInterval)
 				}
 
 			},
@@ -235,23 +203,12 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						Namespace:  el.GetNamespace(),
 					},
 				}
-				dig := digestForEvent(item)
 
-				if _, exists := items.Load(dig); exists {
-					opts.Logger.Debug("DeleteFunc: item already exists in the queue.")
-					return
-				}
-				if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-					queue.AddRateLimited(item)
-					// fmt.Println("Queueing delete event")
-					// fmt.Println("Queue length: ", queue.Len())
-					// fmt.Println("Queue elements: ", queue)
-				}
+				queue.AddRateLimited(item)
 			},
 		},
 	})
 	return &Controller{
-		items:           &items,
 		dynamicClient:   opts.Client,
 		discoveryClient: opts.Discovery,
 		gvr:             opts.GVR,

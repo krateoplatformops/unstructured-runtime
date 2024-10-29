@@ -20,6 +20,7 @@ const (
 	ReasonUnavailable string = "Unavailable"
 	ReasonCreating    string = "Creating"
 	ReasonDeleting    string = "Deleting"
+	ReasonInstalled   string = "Installed"
 )
 
 // Reasons a resource is or is not synced.
@@ -88,6 +89,15 @@ func Available() metav1.Condition {
 		Status:             metav1.ConditionTrue,
 		LastTransitionTime: metav1.Now(),
 		Reason:             ReasonAvailable,
+	}
+}
+
+func Installed() metav1.Condition {
+	return metav1.Condition{
+		Type:               TypeSynced,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             ReasonInstalled,
 	}
 }
 

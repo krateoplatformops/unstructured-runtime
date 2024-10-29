@@ -29,10 +29,6 @@ func (c *Controller) runWorker(ctx context.Context) {
 			break
 		}
 
-		dig := digestForEvent(obj)
-		// fmt.Println("Deleting dig: ", dig)
-		// fmt.Println("Printing queue: ", obj)
-		c.items.Delete(dig)
 		defer c.queue.Done(obj)
 
 		err := c.processItem(ctx, obj)
