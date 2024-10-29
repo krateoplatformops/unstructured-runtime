@@ -119,6 +119,16 @@ func GetConditions(un *unstructured.Unstructured) []metav1.Condition {
 	return x
 }
 
+func GetCondition(un *unstructured.Unstructured, condType string, reason string) *metav1.Condition {
+	conds := GetConditions(un)
+	for _, co := range conds {
+		if co.Type == condType && co.Reason == reason {
+			return &co
+		}
+	}
+	return nil
+}
+
 func SetFailedObjectRef(un *unstructured.Unstructured, ref *objectref.ObjectRef) error {
 	return setNestedFieldNoCopy(un, map[string]interface{}{
 		"apiVersion": ref.APIVersion,

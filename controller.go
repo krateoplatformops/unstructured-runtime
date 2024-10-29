@@ -15,15 +15,16 @@ import (
 )
 
 type Options struct {
-	Debug          bool                         `json:"debug"`
-	ProviderName   string                       `json:"providerName"`
-	GVR            schema.GroupVersionResource  `json:"gvr"`
-	Client         dynamic.Interface            `json:"client"`
-	Discovery      discovery.DiscoveryInterface `json:"discovery"`
-	Namespace      string                       `json:"namespace"`
-	Config         *rest.Config                 `json:"config"`
-	ResyncInterval time.Duration                `json:"resyncInterval"`
-	Logger         logging.Logger               `json:"logger"`
+	Debug          bool                                `json:"debug"`
+	ProviderName   string                              `json:"providerName"`
+	GVR            schema.GroupVersionResource         `json:"gvr"`
+	Client         dynamic.Interface                   `json:"client"`
+	Discovery      discovery.DiscoveryInterface        `json:"discovery"`
+	Namespace      string                              `json:"namespace"`
+	Config         *rest.Config                        `json:"config"`
+	ResyncInterval time.Duration                       `json:"resyncInterval"`
+	Logger         logging.Logger                      `json:"logger"`
+	ListWatcher    controller.ListWatcherConfiguration `json:"listWatcher"`
 }
 
 func New(opts Options) *controller.Controller {
@@ -45,5 +46,6 @@ func New(opts Options) *controller.Controller {
 		ResyncInterval: opts.ResyncInterval,
 		Recorder:       event.NewAPIRecorder(rec),
 		Logger:         opts.Logger,
+		ListWatcher:    opts.ListWatcher,
 	})
 }
