@@ -28,33 +28,36 @@ func (c *Controller) runWorker(ctx context.Context) {
 		if shutdown {
 			break
 		}
+		dig := digestForEvent(obj)
 
-		defer c.queue.Done(obj)
+		c.items.Delete(dig)
+		c.queue.Forget(obj)
+		c.queue.Done(obj)
 
 		err := c.processItem(ctx, obj)
 		c.handleErr(err, obj)
 	}
 }
 
-func (c *Controller) handleErr(err error, obj interface{}) {
+func (c *Controller) handleErr(err error, obj Event) {
 	if err == nil {
-		c.queue.Forget(obj.(Event))
 		return
 	}
 
-	if retries := c.queue.NumRequeues(obj.(Event)); retries < maxRetries {
+	if retries := c.queue.NumRequeues(obj); retries < maxRetries {
 		c.logger.WithValues("retries", retries).
 			WithValues("obj", fmt.Sprintf("%v", obj)).
 			Debug("processing event, retrying", "error", err)
-		c.queue.AddRateLimited(obj.(Event))
-		// fmt.Println("Requeue event", obj)
-		// fmt.Println("Queue length: ", c.queue.Len())
-		// fmt.Println("Queue elements: ", c.queue)
+
+		dig := digestForEvent(obj)
+
+		if _, loaded := c.items.LoadOrStore(dig, struct{}{}); !loaded {
+			c.queue.Add(obj)
+		}
 		return
 	}
 
 	c.logger.Debug("error processing event (max retries reached)", "error", err)
-	c.queue.Forget(obj.(Event))
 	runtime.HandleError(err)
 }
 
@@ -68,7 +71,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 	el, err := c.fetch(ctx, evt.ObjectRef, false)
 	if err != nil {
 		c.logger.Debug("Resolving unstructured object", "error", evt.ObjectRef.String())
-		return err
+		return nil
 	}
 
 	if el.GetDeletionTimestamp().IsZero() {

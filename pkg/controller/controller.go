@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -52,6 +53,7 @@ type Controller struct {
 	discoveryClient discovery.DiscoveryInterface
 	gvr             schema.GroupVersionResource
 	queue           workqueue.TypedRateLimitingInterface[Event]
+	items           *sync.Map
 	informer        cache.Controller
 	recorder        eventrec.Recorder
 	logger          logging.Logger
@@ -67,6 +69,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 
 	queue := workqueue.NewTypedRateLimitingQueue(rateLimiter)
 	workqueue.NewTypedRateLimitingQueueWithConfig(rateLimiter, workqueue.TypedRateLimitingQueueConfig[Event]{})
+	items := &sync.Map{}
 
 	lw, err := listwatcher.Create(listwatcher.CreateOption{
 		Client:        opts.Client,
@@ -110,7 +113,11 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						Namespace:  el.GetNamespace(),
 					},
 				}
-				queue.AddRateLimited(item)
+				dig := digestForEvent(item)
+
+				if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
+					queue.Add(item)
+				}
 			},
 			UpdateFunc: func(old, new interface{}) {
 				oldUns, ok := old.(*unstructured.Unstructured)
@@ -128,6 +135,28 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				id, err := sid.Generate()
 				if err != nil {
 					opts.Logger.Debug(fmt.Errorf("UpdateFunc: generating short id: %w", err).Error())
+					return
+				}
+
+				if !newUns.GetDeletionTimestamp().IsZero() {
+					opts.Logger.Debug(fmt.Sprintf("UpdateFunc: object %s/%s is being deleted", newUns.GetNamespace(), newUns.GetName()))
+
+					item := Event{
+						Id:        id,
+						EventType: Delete,
+						ObjectRef: objectref.ObjectRef{
+							APIVersion: newUns.GetAPIVersion(),
+							Kind:       newUns.GetKind(),
+							Name:       newUns.GetName(),
+							Namespace:  newUns.GetNamespace(),
+						},
+					}
+
+					dig := digestForEvent(item)
+
+					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
+						queue.Add(item)
+					}
 					return
 				}
 
@@ -154,7 +183,12 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 							Name:       newUns.GetName(),
 							Namespace:  newUns.GetNamespace(),
 						}}
-					queue.AddRateLimited(item)
+
+					dig := digestForEvent(item)
+
+					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
+						queue.Add(item)
+					}
 				} else {
 					item := Event{
 						Id:        id,
@@ -167,7 +201,14 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						},
 					}
 
-					queue.AddAfter(item, opts.ResyncInterval)
+					dig := digestForEvent(item)
+
+					if _, loaded := items.Load(dig); !loaded {
+						time.AfterFunc(opts.ResyncInterval, func() {
+							items.Store(dig, struct{}{})
+							queue.Add(item)
+						})
+					}
 				}
 
 			},
@@ -177,6 +218,8 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					opts.Logger.Debug("DeleteFunc: object is not an unstructured.")
 					return
 				}
+
+				opts.Logger.Debug(fmt.Sprintf("DeleteFunc: deleting object %s/%s", el.GetNamespace(), el.GetName()))
 
 				if meta.IsPaused(el) {
 					opts.Logger.Debug(fmt.Sprintf("Reconciliation is paused via the pause annotation %s: %s; %s: %s", "annotation", meta.AnnotationKeyReconciliationPaused, "value", "true"))
@@ -203,8 +246,11 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						Namespace:  el.GetNamespace(),
 					},
 				}
+				dig := digestForEvent(item)
 
-				queue.AddRateLimited(item)
+				if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
+					queue.Add(item)
+				}
 			},
 		},
 	})
@@ -212,6 +258,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 		dynamicClient:   opts.Client,
 		discoveryClient: opts.Discovery,
 		gvr:             opts.GVR,
+		items:           items,
 		recorder:        opts.Recorder,
 		logger:          opts.Logger,
 		informer:        informer,
