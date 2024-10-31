@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
 	eventrec "github.com/krateoplatformops/unstructured-runtime/pkg/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
@@ -28,7 +29,7 @@ func (c *Controller) runWorker(ctx context.Context) {
 		if shutdown {
 			break
 		}
-		dig := digestForEvent(obj)
+		dig := event.DigestForEvent(obj)
 
 		c.items.Delete(dig)
 		c.queue.Forget(obj)
@@ -39,7 +40,7 @@ func (c *Controller) runWorker(ctx context.Context) {
 	}
 }
 
-func (c *Controller) handleErr(err error, obj Event) {
+func (c *Controller) handleErr(err error, obj event.Event) {
 	if err == nil {
 		return
 	}
@@ -49,7 +50,7 @@ func (c *Controller) handleErr(err error, obj Event) {
 			WithValues("obj", fmt.Sprintf("%v", obj)).
 			Debug("processing event, retrying", "error", err)
 
-		dig := digestForEvent(obj)
+		dig := event.DigestForEvent(obj)
 
 		if _, loaded := c.items.LoadOrStore(dig, struct{}{}); !loaded {
 			c.queue.Add(obj)
@@ -62,7 +63,7 @@ func (c *Controller) handleErr(err error, obj Event) {
 }
 
 func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
-	evt, ok := obj.(Event)
+	evt, ok := obj.(event.Event)
 	if !ok {
 		c.logger.Debug("unexpected event", "object", obj)
 		return nil
@@ -98,11 +99,11 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 	c.logger.Debug("processing", "objectRef", evt.ObjectRef.String())
 	switch evt.EventType {
-	case Create:
+	case event.Create:
 		return c.handleCreate(ctx, evt.ObjectRef)
-	case Update:
+	case event.Update:
 		return c.handleUpdateEvent(ctx, evt.ObjectRef)
-	case Delete:
+	case event.Delete:
 		return c.handleDeleteEvent(ctx, evt.ObjectRef)
 	default:
 		return c.handleObserve(ctx, evt.ObjectRef)
@@ -111,7 +112,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef) error {
 	if c.externalClient == nil {
-		c.logger.WithValues("eventType", string(Observe)).Debug("No event handler registered.")
+		c.logger.WithValues("eventType", string(event.Observe)).Debug("No event handler registered.")
 		return nil
 	}
 
@@ -176,7 +177,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 
 func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) error {
 	if c.externalClient == nil {
-		c.logger.WithValues("eventType", string(Create)).Debug("No event handler registered.")
+		c.logger.WithValues("eventType", string(event.Create)).Debug("No event handler registered.")
 		return nil
 	}
 
@@ -236,7 +237,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 
 func (c *Controller) handleUpdateEvent(ctx context.Context, ref objectref.ObjectRef) error {
 	if c.externalClient == nil {
-		c.logger.WithValues("eventType", string(Update)).Debug("No event handler registered.")
+		c.logger.WithValues("eventType", string(event.Update)).Debug("No event handler registered.")
 		return nil
 	}
 
@@ -296,7 +297,7 @@ func (c *Controller) handleUpdateEvent(ctx context.Context, ref objectref.Object
 
 func (c *Controller) handleDeleteEvent(ctx context.Context, ref objectref.ObjectRef) error {
 	if c.externalClient == nil {
-		c.logger.WithValues("eventType", string(Delete)).Debug("No event handler registered.")
+		c.logger.WithValues("eventType", string(event.Delete)).Debug("No event handler registered.")
 		return nil
 	}
 
