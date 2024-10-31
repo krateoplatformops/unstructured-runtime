@@ -141,7 +141,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 		return nil
 	}
 
-	exists, actionErr := c.externalClient.Observe(ctx, el)
+	observation, actionErr := c.externalClient.Observe(ctx, el)
 	if actionErr != nil {
 		if apierrors.IsNotFound(actionErr) {
 			return c.externalClient.Update(ctx, el)
@@ -167,9 +167,12 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 			c.logger.Debug("Observe: updating status", "error", err)
 			return err
 		}
+		return actionErr
 	}
-	if !exists {
+	if !observation.ResourceExists {
 		return c.externalClient.Create(ctx, el)
+	} else if observation.ResourceExists && !observation.ResourceUpToDate {
+		return c.externalClient.Update(ctx, el)
 	}
 
 	return nil

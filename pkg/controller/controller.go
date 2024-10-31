@@ -38,7 +38,7 @@ const (
 // if it's called again with the same parameters or Delete call should not
 // return error if there is an ongoing deletion or resource does not exist.
 type ExternalClient interface {
-	Observe(ctx context.Context, mg *unstructured.Unstructured) (bool, error)
+	Observe(ctx context.Context, mg *unstructured.Unstructured) (ExternalObservation, error)
 	Create(ctx context.Context, mg *unstructured.Unstructured) error
 	Update(ctx context.Context, mg *unstructured.Unstructured) error
 	Delete(ctx context.Context, mg *unstructured.Unstructured) error
