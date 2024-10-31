@@ -3,9 +3,11 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
 	eventrec "github.com/krateoplatformops/unstructured-runtime/pkg/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/listwatcher"
@@ -30,6 +32,30 @@ const (
 	reasonReconciliationFailed eventrec.Reason = "ReconciliationFailed"
 )
 
+// An ExternalClient manages the lifecycle of an external resource.
+// None of the calls here should be blocking. All of the calls should be
+// idempotent. For example, Create call should not return AlreadyExists error
+// if it's called again with the same parameters or Delete call should not
+// return error if there is an ongoing deletion or resource does not exist.
+type ExternalClient interface {
+	Observe(ctx context.Context, mg *unstructured.Unstructured) (bool, error)
+	Create(ctx context.Context, mg *unstructured.Unstructured) error
+	Update(ctx context.Context, mg *unstructured.Unstructured) error
+	Delete(ctx context.Context, mg *unstructured.Unstructured) error
+}
+
+// An ExternalObservation is the result of an observation of an external resource.
+type ExternalObservation struct {
+	// ResourceExists must be true if a corresponding external resource exists
+	// for the managed resource.
+	ResourceExists bool
+
+	// ResourceUpToDate should be true if the corresponding external resource
+	// appears to be up-to-date - i.e. updating the external resource to match
+	// the desired state of the managed resource would be a no-op.
+	ResourceUpToDate bool
+}
+
 type ListWatcherConfiguration struct {
 	LabelSelector *string
 	FieldSelector *string
@@ -51,7 +77,8 @@ type Controller struct {
 	dynamicClient   dynamic.Interface
 	discoveryClient discovery.DiscoveryInterface
 	gvr             schema.GroupVersionResource
-	queue           workqueue.TypedRateLimitingInterface[Event]
+	queue           workqueue.TypedRateLimitingInterface[event.Event]
+	items           *sync.Map
 	informer        cache.Controller
 	recorder        eventrec.Recorder
 	logger          logging.Logger
@@ -60,13 +87,14 @@ type Controller struct {
 
 func New(sid *shortid.Shortid, opts Options) *Controller {
 	rateLimiter := workqueue.NewTypedMaxOfRateLimiter(
-		workqueue.NewTypedItemExponentialFailureRateLimiter[Event](3*time.Second, 180*time.Second),
+		workqueue.NewTypedItemExponentialFailureRateLimiter[event.Event](3*time.Second, 180*time.Second),
 		// 10 qps, 100 bucket size.  This is only for retry speed and its only the overall factor (not per item)
-		&workqueue.TypedBucketRateLimiter[Event]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+		&workqueue.TypedBucketRateLimiter[event.Event]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
 	)
 
 	queue := workqueue.NewTypedRateLimitingQueue(rateLimiter)
-	workqueue.NewTypedRateLimitingQueueWithConfig(rateLimiter, workqueue.TypedRateLimitingQueueConfig[Event]{})
+	workqueue.NewTypedRateLimitingQueueWithConfig(rateLimiter, workqueue.TypedRateLimitingQueueConfig[event.Event]{})
+	items := &sync.Map{}
 
 	lw, err := listwatcher.Create(listwatcher.CreateOption{
 		Client:        opts.Client,
@@ -100,9 +128,9 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					return
 				}
 
-				item := Event{
+				item := event.Event{
 					Id:        id,
-					EventType: Observe,
+					EventType: event.Observe,
 					ObjectRef: objectref.ObjectRef{
 						APIVersion: el.GetAPIVersion(),
 						Kind:       el.GetKind(),
@@ -110,7 +138,11 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						Namespace:  el.GetNamespace(),
 					},
 				}
-				queue.AddRateLimited(item)
+				dig := event.DigestForEvent(item)
+
+				if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
+					queue.Add(item)
+				}
 			},
 			UpdateFunc: func(old, new interface{}) {
 				oldUns, ok := old.(*unstructured.Unstructured)
@@ -131,6 +163,28 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					return
 				}
 
+				if !newUns.GetDeletionTimestamp().IsZero() {
+					opts.Logger.Debug(fmt.Sprintf("UpdateFunc: object %s/%s is being deleted", newUns.GetNamespace(), newUns.GetName()))
+
+					item := event.Event{
+						Id:        id,
+						EventType: event.Delete,
+						ObjectRef: objectref.ObjectRef{
+							APIVersion: newUns.GetAPIVersion(),
+							Kind:       newUns.GetKind(),
+							Name:       newUns.GetName(),
+							Namespace:  newUns.GetNamespace(),
+						},
+					}
+
+					dig := event.DigestForEvent(item)
+
+					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
+						queue.Add(item)
+					}
+					return
+				}
+
 				newSpec, _, err := unstructured.NestedMap(newUns.Object, "spec")
 				if err != nil {
 					opts.Logger.Debug(fmt.Errorf("UpdateFunc: getting new object spec: %w", err).Error())
@@ -145,20 +199,25 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				diff := cmp.Diff(newSpec, oldSpec)
 				opts.Logger.Debug(fmt.Sprintf("UpdateFunc: comparing current spec with desired spec: %s", diff))
 				if len(diff) > 0 {
-					item := Event{
+					item := event.Event{
 						Id:        id,
-						EventType: Update,
+						EventType: event.Update,
 						ObjectRef: objectref.ObjectRef{
 							APIVersion: newUns.GetAPIVersion(),
 							Kind:       newUns.GetKind(),
 							Name:       newUns.GetName(),
 							Namespace:  newUns.GetNamespace(),
 						}}
-					queue.AddRateLimited(item)
+
+					dig := event.DigestForEvent(item)
+
+					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
+						queue.Add(item)
+					}
 				} else {
-					item := Event{
+					item := event.Event{
 						Id:        id,
-						EventType: Observe,
+						EventType: event.Observe,
 						ObjectRef: objectref.ObjectRef{
 							APIVersion: newUns.GetAPIVersion(),
 							Kind:       newUns.GetKind(),
@@ -167,7 +226,14 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						},
 					}
 
-					queue.AddAfter(item, opts.ResyncInterval)
+					dig := event.DigestForEvent(item)
+
+					if _, loaded := items.Load(dig); !loaded {
+						time.AfterFunc(opts.ResyncInterval, func() {
+							items.Store(dig, struct{}{})
+							queue.Add(item)
+						})
+					}
 				}
 
 			},
@@ -177,6 +243,8 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					opts.Logger.Debug("DeleteFunc: object is not an unstructured.")
 					return
 				}
+
+				opts.Logger.Debug(fmt.Sprintf("DeleteFunc: deleting object %s/%s", el.GetNamespace(), el.GetName()))
 
 				if meta.IsPaused(el) {
 					opts.Logger.Debug(fmt.Sprintf("Reconciliation is paused via the pause annotation %s: %s; %s: %s", "annotation", meta.AnnotationKeyReconciliationPaused, "value", "true"))
@@ -193,9 +261,9 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					return
 				}
 
-				item := Event{
+				item := event.Event{
 					Id:        id,
-					EventType: Delete,
+					EventType: event.Delete,
 					ObjectRef: objectref.ObjectRef{
 						APIVersion: el.GetAPIVersion(),
 						Kind:       el.GetKind(),
@@ -203,8 +271,11 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						Namespace:  el.GetNamespace(),
 					},
 				}
+				dig := event.DigestForEvent(item)
 
-				queue.AddRateLimited(item)
+				if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
+					queue.Add(item)
+				}
 			},
 		},
 	})
@@ -212,6 +283,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 		dynamicClient:   opts.Client,
 		discoveryClient: opts.Discovery,
 		gvr:             opts.GVR,
+		items:           items,
 		recorder:        opts.Recorder,
 		logger:          opts.Logger,
 		informer:        informer,
