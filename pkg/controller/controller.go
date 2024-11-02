@@ -229,8 +229,8 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					dig := event.DigestForEvent(item)
 
 					if _, loaded := items.Load(dig); !loaded {
+						items.Store(dig, struct{}{})
 						time.AfterFunc(opts.ResyncInterval, func() {
-							items.Store(dig, struct{}{})
 							queue.Add(item)
 						})
 					}
