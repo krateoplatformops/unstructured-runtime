@@ -10,8 +10,6 @@ import (
 )
 
 type UpdateOptions struct {
-	// DiscoveryClient discovery.DiscoveryInterface
-	// UrlPlurals    *string
 	Pluralizer    pluralizer.Pluralizer
 	DynamicClient dynamic.Interface
 }
