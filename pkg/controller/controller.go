@@ -13,6 +13,7 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/listwatcher"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/shortid"
 	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured/condition"
@@ -71,9 +72,11 @@ type Options struct {
 	Logger         logging.Logger
 	ExternalClient ExternalClient
 	ListWatcher    ListWatcherConfiguration
+	Pluralizer     pluralizer.Pluralizer
 }
 
 type Controller struct {
+	pluralizer      pluralizer.Pluralizer
 	dynamicClient   dynamic.Interface
 	discoveryClient discovery.DiscoveryInterface
 	gvr             schema.GroupVersionResource
