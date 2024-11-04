@@ -160,8 +160,8 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 		}
 
 		_, err = tools.UpdateStatus(ctx, e, tools.UpdateOptions{
-			DiscoveryClient: c.discoveryClient,
-			DynamicClient:   c.dynamicClient,
+			Pluralizer:    c.pluralizer,
+			DynamicClient: c.dynamicClient,
 		})
 		if err != nil {
 			c.logger.Debug("Observe: updating status", "error", err)
@@ -224,8 +224,8 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 		}
 
 		_, err = tools.UpdateStatus(ctx, e, tools.UpdateOptions{
-			DiscoveryClient: c.discoveryClient,
-			DynamicClient:   c.dynamicClient,
+			Pluralizer:    c.pluralizer,
+			DynamicClient: c.dynamicClient,
 		})
 		if err != nil {
 			// c.logger.Error().Err(err).Msg("UpdateFunc: updating status.")
@@ -285,8 +285,8 @@ func (c *Controller) handleUpdateEvent(ctx context.Context, ref objectref.Object
 		}
 
 		_, err = tools.UpdateStatus(ctx, e, tools.UpdateOptions{
-			DiscoveryClient: c.discoveryClient,
-			DynamicClient:   c.dynamicClient,
+			Pluralizer:    c.pluralizer,
+			DynamicClient: c.dynamicClient,
 		})
 		if err != nil {
 			c.logger.Debug("UpdateFunc: updating status", "error", err)

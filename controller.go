@@ -7,6 +7,7 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/eventrecorder"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/shortid"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
@@ -17,9 +18,10 @@ import (
 type Options struct {
 	Debug          bool                                `json:"debug"`
 	ProviderName   string                              `json:"providerName"`
+	Pluralizer     pluralizer.Pluralizer               `json:"pluralizer"`
 	GVR            schema.GroupVersionResource         `json:"gvr"`
 	Client         dynamic.Interface                   `json:"client"`
-	Discovery      discovery.DiscoveryInterface        `json:"discovery"`
+	Discovery      discovery.CachedDiscoveryInterface  `json:"discovery"`
 	Namespace      string                              `json:"namespace"`
 	Config         *rest.Config                        `json:"config"`
 	ResyncInterval time.Duration                       `json:"resyncInterval"`
