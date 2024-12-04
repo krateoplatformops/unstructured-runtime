@@ -292,6 +292,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 		informer:        informer,
 		queue:           queue,
 		externalClient:  opts.ExternalClient,
+		pluralizer:      opts.Pluralizer,
 	}
 }
 
