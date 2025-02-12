@@ -47,7 +47,7 @@ func (c *Controller) handleErr(err error, obj event.Event) {
 
 	if retries := c.queue.NumRequeues(obj); retries < maxRetries {
 		c.logger.WithValues("retries", retries).
-			WithValues("obj", fmt.Sprintf("%v", obj)).
+			WithValues("obj", fmt.Sprintf("%v", obj.EventType)).
 			Debug("processing event, retrying", "error", err)
 
 		dig := event.DigestForEvent(obj)
@@ -71,7 +71,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 	el, err := c.fetch(ctx, evt.ObjectRef, false)
 	if err != nil {
-		c.logger.Debug("Resolving unstructured object", "error", evt.ObjectRef.String())
+		// if the object is not found, we will not retry to process it and we not throw an error
 		return nil
 	}
 

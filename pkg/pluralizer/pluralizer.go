@@ -15,6 +15,10 @@ type names struct {
 	Shorts   []string `json:"shorts"`
 }
 
+type PluralizerInterface interface {
+	GVKtoGVR(gvk schema.GroupVersionKind) (schema.GroupVersionResource, error)
+}
+
 type Pluralizer struct {
 	urlPlurals *string
 	cli        *http.Client
