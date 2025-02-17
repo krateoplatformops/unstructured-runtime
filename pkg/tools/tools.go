@@ -10,7 +10,7 @@ import (
 )
 
 type UpdateOptions struct {
-	Pluralizer    pluralizer.Pluralizer
+	Pluralizer    pluralizer.PluralizerInterface
 	DynamicClient dynamic.Interface
 }
 

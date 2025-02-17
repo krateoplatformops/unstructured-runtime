@@ -18,7 +18,7 @@ import (
 type Options struct {
 	Debug          bool                                `json:"debug"`
 	ProviderName   string                              `json:"providerName"`
-	Pluralizer     pluralizer.Pluralizer               `json:"pluralizer"`
+	Pluralizer     pluralizer.PluralizerInterface      `json:"pluralizer"`
 	GVR            schema.GroupVersionResource         `json:"gvr"`
 	Client         dynamic.Interface                   `json:"client"`
 	Discovery      discovery.CachedDiscoveryInterface  `json:"discovery"`

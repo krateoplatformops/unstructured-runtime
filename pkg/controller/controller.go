@@ -72,11 +72,11 @@ type Options struct {
 	Logger         logging.Logger
 	ExternalClient ExternalClient
 	ListWatcher    ListWatcherConfiguration
-	Pluralizer     pluralizer.Pluralizer
+	Pluralizer     pluralizer.PluralizerInterface
 }
 
 type Controller struct {
-	pluralizer      pluralizer.Pluralizer
+	pluralizer      pluralizer.PluralizerInterface
 	dynamicClient   dynamic.Interface
 	discoveryClient discovery.DiscoveryInterface
 	gvr             schema.GroupVersionResource
