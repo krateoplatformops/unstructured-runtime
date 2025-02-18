@@ -41,6 +41,7 @@ func New(opts Options) *controller.Controller {
 	}
 
 	return controller.New(sid, controller.Options{
+		Pluralizer:     opts.Pluralizer,
 		Client:         opts.Client,
 		Discovery:      opts.Discovery,
 		GVR:            opts.GVR,
