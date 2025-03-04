@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
+	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
-	eventrec "github.com/krateoplatformops/unstructured-runtime/pkg/event"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/listwatcher"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
@@ -29,8 +29,8 @@ import (
 )
 
 const (
-	reasonReconciliationPaused eventrec.Reason = "ReconciliationPaused"
-	reasonReconciliationFailed eventrec.Reason = "ReconciliationFailed"
+	reasonReconciliationPaused event.Reason = "ReconciliationPaused"
+	reasonReconciliationFailed event.Reason = "ReconciliationFailed"
 )
 
 // An ExternalClient manages the lifecycle of an external resource.
@@ -68,7 +68,7 @@ type Options struct {
 	GVR            schema.GroupVersionResource
 	Namespace      string
 	ResyncInterval time.Duration
-	Recorder       eventrec.Recorder
+	Recorder       event.Recorder
 	Logger         logging.Logger
 	ExternalClient ExternalClient
 	ListWatcher    ListWatcherConfiguration
@@ -80,23 +80,23 @@ type Controller struct {
 	dynamicClient   dynamic.Interface
 	discoveryClient discovery.DiscoveryInterface
 	gvr             schema.GroupVersionResource
-	queue           workqueue.TypedRateLimitingInterface[event.Event]
+	queue           workqueue.TypedRateLimitingInterface[ctrlevent.Event]
 	items           *sync.Map
 	informer        cache.Controller
-	recorder        eventrec.Recorder
+	recorder        event.Recorder
 	logger          logging.Logger
 	externalClient  ExternalClient
 }
 
 func New(sid *shortid.Shortid, opts Options) *Controller {
 	rateLimiter := workqueue.NewTypedMaxOfRateLimiter(
-		workqueue.NewTypedItemExponentialFailureRateLimiter[event.Event](3*time.Second, 180*time.Second),
+		workqueue.NewTypedItemExponentialFailureRateLimiter[ctrlevent.Event](3*time.Second, 180*time.Second),
 		// 10 qps, 100 bucket size.  This is only for retry speed and its only the overall factor (not per item)
-		&workqueue.TypedBucketRateLimiter[event.Event]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+		&workqueue.TypedBucketRateLimiter[ctrlevent.Event]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
 	)
 
 	queue := workqueue.NewTypedRateLimitingQueue(rateLimiter)
-	workqueue.NewTypedRateLimitingQueueWithConfig(rateLimiter, workqueue.TypedRateLimitingQueueConfig[event.Event]{})
+	workqueue.NewTypedRateLimitingQueueWithConfig(rateLimiter, workqueue.TypedRateLimitingQueueConfig[ctrlevent.Event]{})
 	items := &sync.Map{}
 
 	lw, err := listwatcher.Create(listwatcher.CreateOption{
@@ -131,9 +131,9 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					return
 				}
 
-				item := event.Event{
+				item := ctrlevent.Event{
 					Id:        id,
-					EventType: event.Observe,
+					EventType: ctrlevent.Observe,
 					ObjectRef: objectref.ObjectRef{
 						APIVersion: el.GetAPIVersion(),
 						Kind:       el.GetKind(),
@@ -141,7 +141,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						Namespace:  el.GetNamespace(),
 					},
 				}
-				dig := event.DigestForEvent(item)
+				dig := ctrlevent.DigestForEvent(item)
 
 				if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
 					queue.Add(item)
@@ -169,9 +169,9 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				if !newUns.GetDeletionTimestamp().IsZero() {
 					opts.Logger.Debug(fmt.Sprintf("UpdateFunc: object %s/%s is being deleted", newUns.GetNamespace(), newUns.GetName()))
 
-					item := event.Event{
+					item := ctrlevent.Event{
 						Id:        id,
-						EventType: event.Delete,
+						EventType: ctrlevent.Delete,
 						ObjectRef: objectref.ObjectRef{
 							APIVersion: newUns.GetAPIVersion(),
 							Kind:       newUns.GetKind(),
@@ -180,7 +180,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						},
 					}
 
-					dig := event.DigestForEvent(item)
+					dig := ctrlevent.DigestForEvent(item)
 
 					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
 						queue.Add(item)
@@ -202,9 +202,9 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				diff := cmp.Diff(newSpec, oldSpec)
 				opts.Logger.Debug(fmt.Sprintf("UpdateFunc: comparing current spec with desired spec: %s", diff))
 				if len(diff) > 0 {
-					item := event.Event{
+					item := ctrlevent.Event{
 						Id:        id,
-						EventType: event.Update,
+						EventType: ctrlevent.Update,
 						ObjectRef: objectref.ObjectRef{
 							APIVersion: newUns.GetAPIVersion(),
 							Kind:       newUns.GetKind(),
@@ -212,15 +212,15 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 							Namespace:  newUns.GetNamespace(),
 						}}
 
-					dig := event.DigestForEvent(item)
+					dig := ctrlevent.DigestForEvent(item)
 
 					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
 						queue.Add(item)
 					}
 				} else {
-					item := event.Event{
+					item := ctrlevent.Event{
 						Id:        id,
-						EventType: event.Observe,
+						EventType: ctrlevent.Observe,
 						ObjectRef: objectref.ObjectRef{
 							APIVersion: newUns.GetAPIVersion(),
 							Kind:       newUns.GetKind(),
@@ -229,7 +229,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						},
 					}
 
-					dig := event.DigestForEvent(item)
+					dig := ctrlevent.DigestForEvent(item)
 
 					if _, loaded := items.Load(dig); !loaded {
 						items.Store(dig, struct{}{})
@@ -251,7 +251,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 
 				if meta.IsPaused(el) {
 					opts.Logger.Debug(fmt.Sprintf("Reconciliation is paused via the pause annotation %s: %s; %s: %s", "annotation", meta.AnnotationKeyReconciliationPaused, "value", "true"))
-					opts.Recorder.Event(el, eventrec.Normal(reasonReconciliationPaused, "Reconciliation is paused via the pause annotation"))
+					opts.Recorder.Event(el, event.Normal(reasonReconciliationPaused, "Reconciliation is paused via the pause annotation"))
 					unstructuredtools.SetCondition(el, condition.ReconcilePaused())
 					// if the pause annotation is removed, we will have a chance to reconcile again and resume
 					// and if status update fails, we will reconcile again to retry to update the status
@@ -264,9 +264,9 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					return
 				}
 
-				item := event.Event{
+				item := ctrlevent.Event{
 					Id:        id,
-					EventType: event.Delete,
+					EventType: ctrlevent.Delete,
 					ObjectRef: objectref.ObjectRef{
 						APIVersion: el.GetAPIVersion(),
 						Kind:       el.GetKind(),
@@ -274,7 +274,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						Namespace:  el.GetNamespace(),
 					},
 				}
-				dig := event.DigestForEvent(item)
+				dig := ctrlevent.DigestForEvent(item)
 
 				if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
 					queue.Add(item)

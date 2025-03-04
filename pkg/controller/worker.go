@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
+	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
-	eventrec "github.com/krateoplatformops/unstructured-runtime/pkg/event"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/tools"
 	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
@@ -14,6 +14,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"slices"
 
 	"k8s.io/apimachinery/pkg/util/runtime"
 )
@@ -23,13 +25,31 @@ const (
 	finalizerName = "composition.krateo.io/finalizer"
 )
 
+// Event reasons.
+const (
+	reasonCannotInitialize    event.Reason = "CannotInitializeManagedResource"
+	reasonCannotResolveRefs   event.Reason = "CannotResolveResourceReferences"
+	reasonCannotObserve       event.Reason = "CannotObserveExternalResource"
+	reasonCannotCreate        event.Reason = "CannotCreateExternalResource"
+	reasonCannotDelete        event.Reason = "CannotDeleteExternalResource"
+	reasonCannotPublish       event.Reason = "CannotPublishConnectionDetails"
+	reasonCannotUnpublish     event.Reason = "CannotUnpublishConnectionDetails"
+	reasonCannotUpdate        event.Reason = "CannotUpdateExternalResource"
+	reasonCannotUpdateManaged event.Reason = "CannotUpdateManagedResource"
+
+	reasonDeleted event.Reason = "DeletedExternalResource"
+	reasonCreated event.Reason = "CreatedExternalResource"
+	reasonUpdated event.Reason = "UpdatedExternalResource"
+	reasonPending event.Reason = "PendingExternalResource"
+)
+
 func (c *Controller) runWorker(ctx context.Context) {
 	for {
 		obj, shutdown := c.queue.Get()
 		if shutdown {
 			break
 		}
-		dig := event.DigestForEvent(obj)
+		dig := ctrlevent.DigestForEvent(obj)
 
 		c.items.Delete(dig)
 		c.queue.Forget(obj)
@@ -40,7 +60,7 @@ func (c *Controller) runWorker(ctx context.Context) {
 	}
 }
 
-func (c *Controller) handleErr(err error, obj event.Event) {
+func (c *Controller) handleErr(err error, obj ctrlevent.Event) {
 	if err == nil {
 		return
 	}
@@ -50,7 +70,7 @@ func (c *Controller) handleErr(err error, obj event.Event) {
 			WithValues("obj", fmt.Sprintf("%v", obj.EventType)).
 			Debug("processing event, retrying", "error", err)
 
-		dig := event.DigestForEvent(obj)
+		dig := ctrlevent.DigestForEvent(obj)
 
 		if _, loaded := c.items.LoadOrStore(dig, struct{}{}); !loaded {
 			c.queue.Add(obj)
@@ -63,7 +83,7 @@ func (c *Controller) handleErr(err error, obj event.Event) {
 }
 
 func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
-	evt, ok := obj.(event.Event)
+	evt, ok := obj.(ctrlevent.Event)
 	if !ok {
 		c.logger.Debug("unexpected event", "object", obj)
 		return nil
@@ -77,13 +97,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 	if el.GetDeletionTimestamp().IsZero() {
 		finalizers := el.GetFinalizers()
-		exist := false
-		for _, finalizer := range finalizers {
-			if finalizer == finalizerName {
-				exist = true
-				break
-			}
-		}
+		exist := slices.Contains(finalizers, finalizerName)
 
 		if !exist {
 			el.SetFinalizers(append(finalizers, finalizerName))
@@ -99,11 +113,11 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 	c.logger.Debug("processing", "objectRef", evt.ObjectRef.String())
 	switch evt.EventType {
-	case event.Create:
+	case ctrlevent.Create:
 		return c.handleCreate(ctx, evt.ObjectRef)
-	case event.Update:
-		return c.handleUpdateEvent(ctx, evt.ObjectRef)
-	case event.Delete:
+	case ctrlevent.Update:
+		return c.handleUpdate(ctx, evt.ObjectRef)
+	case ctrlevent.Delete:
 		return c.handleDeleteEvent(ctx, evt.ObjectRef)
 	default:
 		return c.handleObserve(ctx, evt.ObjectRef)
@@ -112,7 +126,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef) error {
 	if c.externalClient == nil {
-		c.logger.WithValues("eventType", string(event.Observe)).Debug("No event handler registered.")
+		c.logger.WithValues("eventType", string(ctrlevent.Observe)).Debug("No event handler registered.")
 		return nil
 	}
 
@@ -124,7 +138,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 
 	if meta.IsPaused(el) {
 		c.logger.Debug("Reconciliation is paused via the pause annotation.", "annotation", meta.AnnotationKeyReconciliationPaused, "value", "true")
-		c.recorder.Event(el, eventrec.Normal(reasonReconciliationPaused, "Reconciliation is paused via the pause annotation"))
+		c.recorder.Event(el, event.Normal(reasonReconciliationPaused, "Reconciliation is paused via the pause annotation"))
 		err = unstructuredtools.SetCondition(el, condition.ReconcilePaused())
 		if err != nil {
 			c.logger.Debug("UpdateFunc: setting condition", "error", err)
@@ -143,6 +157,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 
 	observation, actionErr := c.externalClient.Observe(ctx, el)
 	if actionErr != nil {
+		c.recorder.Event(el, event.Warning(reasonCannotObserve, actionErr))
 		if apierrors.IsNotFound(actionErr) {
 			return c.externalClient.Update(ctx, el)
 		}
@@ -170,9 +185,9 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 		return actionErr
 	}
 	if !observation.ResourceExists {
-		return c.externalClient.Create(ctx, el)
+		return c.handleCreate(ctx, ref)
 	} else if observation.ResourceExists && !observation.ResourceUpToDate {
-		return c.externalClient.Update(ctx, el)
+		return c.handleUpdate(ctx, ref)
 	}
 
 	return nil
@@ -180,7 +195,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 
 func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) error {
 	if c.externalClient == nil {
-		c.logger.WithValues("eventType", string(event.Create)).Debug("No event handler registered.")
+		c.logger.WithValues("eventType", string(ctrlevent.Create)).Debug("No event handler registered.")
 		return nil
 	}
 
@@ -192,7 +207,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 
 	if meta.IsPaused(el) {
 		c.logger.WithValues("objectRef", ref.String()).Debug("Reconciliation is paused via the pause annotation")
-		c.recorder.Event(el, eventrec.Normal(reasonReconciliationPaused, "Reconciliation is paused via the pause annotation"))
+		c.recorder.Event(el, event.Normal(reasonReconciliationPaused, "Reconciliation is paused via the pause annotation"))
 		err = unstructuredtools.SetCondition(el, condition.ReconcilePaused())
 		if err != nil {
 			c.logger.Debug("CreateFunc: setting condition", "error", err)
@@ -211,6 +226,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 
 	actionErr := c.externalClient.Create(ctx, el)
 	if actionErr != nil {
+		c.recorder.Event(el, event.Warning(reasonCannotCreate, actionErr))
 		e, err := c.fetch(ctx, ref, false)
 		if err != nil {
 			c.logger.WithValues("objectRef", ref.String()).Debug("Resolving unstructured object")
@@ -228,19 +244,20 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 			DynamicClient: c.dynamicClient,
 		})
 		if err != nil {
-			// c.logger.Error().Err(err).Msg("UpdateFunc: updating status.")
 			c.logger.Debug("UpdateFunc: updating status", "error", err)
 			return err
 		}
 
 	}
 
+	c.logger.WithValues("objectRef", ref.String()).Debug("Successfully requested creation of external resource")
+	c.recorder.Event(el, event.Normal(reasonCreated, "Successfully requested creation of external resource"))
 	return actionErr
 }
 
-func (c *Controller) handleUpdateEvent(ctx context.Context, ref objectref.ObjectRef) error {
+func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) error {
 	if c.externalClient == nil {
-		c.logger.WithValues("eventType", string(event.Update)).Debug("No event handler registered.")
+		c.logger.WithValues("eventType", string(ctrlevent.Update)).Debug("No event handler registered.")
 		return nil
 	}
 
@@ -252,7 +269,7 @@ func (c *Controller) handleUpdateEvent(ctx context.Context, ref objectref.Object
 
 	if meta.IsPaused(el) {
 		c.logger.WithValues("annotation", meta.AnnotationKeyReconciliationPaused).Debug("Reconciliation is paused via the pause annotation")
-		c.recorder.Event(el, eventrec.Normal(reasonReconciliationPaused, "Reconciliation is paused via the pause annotation"))
+		c.recorder.Event(el, event.Normal(reasonReconciliationPaused, "Reconciliation is paused via the pause annotation"))
 		err = unstructuredtools.SetCondition(el, condition.ReconcilePaused())
 		if err != nil {
 			c.logger.Debug("UpdateFunc: setting condition", "error", err)
@@ -270,8 +287,8 @@ func (c *Controller) handleUpdateEvent(ctx context.Context, ref objectref.Object
 	}
 
 	actionErr := c.externalClient.Update(ctx, el)
-
 	if actionErr != nil {
+		c.recorder.Event(el, event.Warning(reasonCannotUpdate, actionErr))
 		e, err := c.fetch(ctx, ref, false)
 		if err != nil {
 			c.logger.WithValues("objectRef", ref.String()).Debug("Resolving unstructured object")
@@ -292,15 +309,16 @@ func (c *Controller) handleUpdateEvent(ctx context.Context, ref objectref.Object
 			c.logger.Debug("UpdateFunc: updating status", "error", err)
 			return err
 		}
-
 	}
 
+	c.logger.WithValues("objectRef", ref.String()).Debug("Successfully requested update of external resource")
+	c.recorder.Event(el, event.Normal(reasonUpdated, "Successfully requested update of external resource"))
 	return actionErr
 }
 
 func (c *Controller) handleDeleteEvent(ctx context.Context, ref objectref.ObjectRef) error {
 	if c.externalClient == nil {
-		c.logger.WithValues("eventType", string(event.Delete)).Debug("No event handler registered.")
+		c.logger.WithValues("eventType", string(ctrlevent.Delete)).Debug("No event handler registered.")
 		return nil
 	}
 
@@ -312,6 +330,7 @@ func (c *Controller) handleDeleteEvent(ctx context.Context, ref objectref.Object
 
 	err = c.externalClient.Delete(ctx, el)
 	if err != nil {
+		c.recorder.Event(el, event.Warning(reasonCannotDelete, err))
 		c.logger.Debug("DeleteFunc: deleting object", "error", err)
 		return err
 	}
@@ -322,6 +341,9 @@ func (c *Controller) handleDeleteEvent(ctx context.Context, ref objectref.Object
 		c.logger.Debug("DeleteFunc: removing finalizer", "error", err)
 		return err
 	}
+
+	c.logger.WithValues("objectRef", ref.String()).Debug("Successfully requested deletion of external resource")
+	c.recorder.Event(el, event.Normal(reasonDeleted, "Successfully requested deletion of external resource"))
 	return nil
 }
 
