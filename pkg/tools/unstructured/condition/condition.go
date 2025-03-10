@@ -59,17 +59,6 @@ func FailWithReason(reason string) metav1.Condition {
 	}
 }
 
-// ReconcilePaused returns a condition that indicates reconciliation on
-// the managed resource is paused via the pause annotation.
-func ReconcilePaused() metav1.Condition {
-	return metav1.Condition{
-		Type:               TypeSynced,
-		Status:             metav1.ConditionFalse,
-		LastTransitionTime: metav1.Now(),
-		Reason:             ReasonReconcilePaused,
-	}
-}
-
 // Deleting returns a condition that indicates the resource is currently
 // being deleted.
 func Deleting() metav1.Condition {
@@ -89,15 +78,6 @@ func Available() metav1.Condition {
 		Status:             metav1.ConditionTrue,
 		LastTransitionTime: metav1.Now(),
 		Reason:             ReasonAvailable,
-	}
-}
-
-func Installed() metav1.Condition {
-	return metav1.Condition{
-		Type:               TypeSynced,
-		Status:             metav1.ConditionTrue,
-		LastTransitionTime: metav1.Now(),
-		Reason:             ReasonInstalled,
 	}
 }
 
@@ -126,8 +106,38 @@ func Remove(conds *[]metav1.Condition, typ string) {
 	}
 }
 
-/*
-type Status struct {
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+// ReconcileSuccess returns a condition indicating that the provider successfully
+// completed the most recent reconciliation of the resource.
+func ReconcileSuccess() metav1.Condition {
+	return metav1.Condition{
+		Type:               TypeSynced,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             ReasonReconcileSuccess,
+	}
 }
-*/
+
+// ReconcileError returns a condition indicating that the provider encountered an
+// error while reconciling the resource. This could mean that the provider was
+// unable to update the resource to reflect its desired state, or that
+// was unable to determine the current actual state of the resource.
+func ReconcileError(err error) metav1.Condition {
+	return metav1.Condition{
+		Type:               TypeSynced,
+		Status:             metav1.ConditionFalse,
+		LastTransitionTime: metav1.Now(),
+		Reason:             ReasonReconcileError,
+		Message:            err.Error(),
+	}
+}
+
+// ReconcilePaused returns a condition that indicates reconciliation on
+// the managed resource is paused via the pause annotation.
+func ReconcilePaused() metav1.Condition {
+	return metav1.Condition{
+		Type:               TypeSynced,
+		Status:             metav1.ConditionFalse,
+		LastTransitionTime: metav1.Now(),
+		Reason:             ReasonReconcilePaused,
+	}
+}

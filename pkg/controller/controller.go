@@ -63,16 +63,17 @@ type ListWatcherConfiguration struct {
 }
 
 type Options struct {
-	Client         dynamic.Interface
-	Discovery      discovery.DiscoveryInterface
-	GVR            schema.GroupVersionResource
-	Namespace      string
-	ResyncInterval time.Duration
-	Recorder       event.Recorder
-	Logger         logging.Logger
-	ExternalClient ExternalClient
-	ListWatcher    ListWatcherConfiguration
-	Pluralizer     pluralizer.PluralizerInterface
+	Client            dynamic.Interface
+	Discovery         discovery.DiscoveryInterface
+	GVR               schema.GroupVersionResource
+	Namespace         string
+	ResyncInterval    time.Duration
+	Recorder          event.Recorder
+	Logger            logging.Logger
+	ExternalClient    ExternalClient
+	ListWatcher       ListWatcherConfiguration
+	Pluralizer        pluralizer.PluralizerInterface
+	GlobalRateLimiter workqueue.TypedRateLimiter[ctrlevent.Event]
 }
 
 type Controller struct {
@@ -89,14 +90,17 @@ type Controller struct {
 }
 
 func New(sid *shortid.Shortid, opts Options) *Controller {
-	rateLimiter := workqueue.NewTypedMaxOfRateLimiter(
-		workqueue.NewTypedItemExponentialFailureRateLimiter[ctrlevent.Event](3*time.Second, 180*time.Second),
-		// 10 qps, 100 bucket size.  This is only for retry speed and its only the overall factor (not per item)
-		&workqueue.TypedBucketRateLimiter[ctrlevent.Event]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
-	)
 
-	queue := workqueue.NewTypedRateLimitingQueue(rateLimiter)
-	workqueue.NewTypedRateLimitingQueueWithConfig(rateLimiter, workqueue.TypedRateLimitingQueueConfig[ctrlevent.Event]{})
+	if opts.GlobalRateLimiter == nil {
+		opts.GlobalRateLimiter = workqueue.NewTypedMaxOfRateLimiter(
+			workqueue.NewTypedItemExponentialFailureRateLimiter[ctrlevent.Event](3*time.Second, 180*time.Second),
+			// 10 qps, 100 bucket size.  This is only for retry speed and its only the overall factor (not per item)
+			&workqueue.TypedBucketRateLimiter[ctrlevent.Event]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+		)
+	}
+
+	queue := workqueue.NewTypedRateLimitingQueue(opts.GlobalRateLimiter)
+	workqueue.NewTypedRateLimitingQueueWithConfig(opts.GlobalRateLimiter, workqueue.TypedRateLimitingQueueConfig[ctrlevent.Event]{})
 	items := &sync.Map{}
 
 	lw, err := listwatcher.Create(listwatcher.CreateOption{
@@ -119,18 +123,18 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 		Indexers:      cache.Indexers{},
 		Handler: cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
+				log := opts.Logger.WithValues("Action", "Add")
 				el, ok := obj.(*unstructured.Unstructured)
 				if !ok {
-					opts.Logger.Debug("AddFunc: object is not an unstructured.")
+					log.Debug("Object is not an unstructured.")
 					return
 				}
 
 				id, err := sid.Generate()
 				if err != nil {
-					opts.Logger.Debug(fmt.Errorf("AddFunc: generating short id: %w", err).Error())
+					log.Debug(fmt.Errorf("generating short id: %w", err).Error())
 					return
 				}
-
 				item := ctrlevent.Event{
 					Id:        id,
 					EventType: ctrlevent.Observe,
@@ -148,26 +152,27 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				}
 			},
 			UpdateFunc: func(old, new interface{}) {
+				log := opts.Logger.WithValues("Action", "Update")
 				oldUns, ok := old.(*unstructured.Unstructured)
 				if !ok {
-					opts.Logger.Debug("UpdateFunc: object is not an unstructured.")
+					log.Debug("Object is not an unstructured.")
 					return
 				}
 
 				newUns, ok := new.(*unstructured.Unstructured)
 				if !ok {
-					opts.Logger.Debug("UpdateFunc: object is not an unstructured.")
+					log.Debug("Object is not an unstructured.")
 					return
 				}
 
 				id, err := sid.Generate()
 				if err != nil {
-					opts.Logger.Debug(fmt.Errorf("UpdateFunc: generating short id: %w", err).Error())
+					log.Debug(fmt.Errorf("generating short id: %w", err).Error())
 					return
 				}
 
-				if !newUns.GetDeletionTimestamp().IsZero() {
-					opts.Logger.Debug(fmt.Sprintf("UpdateFunc: object %s/%s is being deleted", newUns.GetNamespace(), newUns.GetName()))
+				if meta.WasDeleted(newUns) {
+					log.Debug(fmt.Sprintf("Object %s/%s is being deleted", newUns.GetNamespace(), newUns.GetName()))
 
 					item := ctrlevent.Event{
 						Id:        id,
@@ -190,17 +195,17 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 
 				newSpec, _, err := unstructured.NestedMap(newUns.Object, "spec")
 				if err != nil {
-					opts.Logger.Debug(fmt.Errorf("UpdateFunc: getting new object spec: %w", err).Error())
+					log.Debug(fmt.Errorf("getting new object spec: %w", err).Error())
 					return
 				}
 
 				oldSpec, _, err := unstructured.NestedMap(oldUns.Object, "spec")
 				if err != nil {
-					opts.Logger.Debug(fmt.Errorf("UpdateFunc: getting old object spec: %w", err).Error())
+					log.Debug(fmt.Errorf("getting old object spec: %w", err).Error())
 				}
 
 				diff := cmp.Diff(newSpec, oldSpec)
-				opts.Logger.Debug(fmt.Sprintf("UpdateFunc: comparing current spec with desired spec: %s", diff))
+				log.Debug(fmt.Sprintf("comparing current spec with desired spec: %s", diff))
 				if len(diff) > 0 {
 					item := ctrlevent.Event{
 						Id:        id,
@@ -241,18 +246,19 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 
 			},
 			DeleteFunc: func(obj interface{}) {
+				log := opts.Logger.WithValues("Action", "Delete")
 				el, ok := obj.(*unstructured.Unstructured)
 				if !ok {
-					opts.Logger.Debug("DeleteFunc: object is not an unstructured.")
+					log.Debug("Object is not an unstructured")
 					return
 				}
 
-				opts.Logger.Debug(fmt.Sprintf("DeleteFunc: deleting object %s/%s", el.GetNamespace(), el.GetName()))
+				log.Debug(fmt.Sprintf("Deleting object %s/%s", el.GetNamespace(), el.GetName()))
 
 				if meta.IsPaused(el) {
-					opts.Logger.Debug(fmt.Sprintf("Reconciliation is paused via the pause annotation %s: %s; %s: %s", "annotation", meta.AnnotationKeyReconciliationPaused, "value", "true"))
+					log.Debug(fmt.Sprintf("Reconciliation is paused via the pause annotation %s: %s; %s: %s", "annotation", meta.AnnotationKeyReconciliationPaused, "value", "true"))
 					opts.Recorder.Event(el, event.Normal(reasonReconciliationPaused, "Reconciliation is paused via the pause annotation"))
-					unstructuredtools.SetCondition(el, condition.ReconcilePaused())
+					unstructuredtools.SetConditions(el, condition.ReconcilePaused())
 					// if the pause annotation is removed, we will have a chance to reconcile again and resume
 					// and if status update fails, we will reconcile again to retry to update the status
 					return
@@ -260,7 +266,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 
 				id, err := sid.Generate()
 				if err != nil {
-					opts.Logger.Debug(fmt.Errorf("DeleteFunc: generating short id: %w", err).Error())
+					log.Debug(fmt.Errorf("generating short id: %w", err).Error())
 					return
 				}
 

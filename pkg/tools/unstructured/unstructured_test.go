@@ -18,7 +18,7 @@ func TestGetConditions(t *testing.T) {
 	all := GetConditions(un)
 	assert.Equal(t, 0, len(all))
 
-	err := SetCondition(un, condition.Unavailable())
+	err := SetConditions(un, condition.Unavailable())
 	assert.Nil(t, err)
 
 	all = GetConditions(un)
@@ -32,7 +32,7 @@ func TestIsAvailable(t *testing.T) {
 	assert.Nil(t, err)
 	assert.True(t, ok)
 
-	err = SetCondition(un, condition.Unavailable())
+	err = SetConditions(un, condition.Unavailable())
 	assert.Nil(t, err)
 
 	ok, err = IsAvailable(un)
@@ -81,7 +81,7 @@ func TestGVR(t *testing.T) {
 	assert.Equal(t, "tests", gvr.Resource)
 }
 
-func TestSetCondition(t *testing.T) {
+func TestSetConditions(t *testing.T) {
 	un := createFakeObject()
 	cond := metav1.Condition{
 		Type:               "Ready",
@@ -89,7 +89,7 @@ func TestSetCondition(t *testing.T) {
 		Reason:             "Tested",
 		LastTransitionTime: metav1.Time{Time: time.Now()},
 	}
-	err := SetCondition(un, cond)
+	err := SetConditions(un, cond)
 	assert.Nil(t, err)
 
 	conds := GetConditions(un)
@@ -107,7 +107,7 @@ func TestGetCondition(t *testing.T) {
 		Reason:             "Tested",
 		LastTransitionTime: metav1.Time{Time: time.Now()},
 	}
-	err := SetCondition(un, cond)
+	err := SetConditions(un, cond)
 	assert.Nil(t, err)
 
 	retrievedCond := GetCondition(un, "Ready", "Tested")
@@ -127,7 +127,7 @@ func TestIsConditionSet(t *testing.T) {
 			Time: time.Now(),
 		},
 	}
-	err := SetCondition(un, cond)
+	err := SetConditions(un, cond)
 	assert.Nil(t, err)
 
 	isSet := IsConditionSet(un, cond)
