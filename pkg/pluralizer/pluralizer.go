@@ -41,6 +41,9 @@ func (p Pluralizer) GVKtoGVR(gvk schema.GroupVersionKind) (schema.GroupVersionRe
 	if err != nil {
 		return schema.GroupVersionResource{}, fmt.Errorf("getting urlplurals: %w", err)
 	}
+	if resp.StatusCode != http.StatusOK {
+		return schema.GroupVersionResource{}, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
 	names := names{}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
