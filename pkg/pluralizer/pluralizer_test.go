@@ -75,11 +75,11 @@ func TestGVKtoGVR(t *testing.T) {
 
 			got, err := p.GVKtoGVR(tt.gvk)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("GVKtoGVR() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("GVKtoGVR() error = %v, wantErr %v - name: %s", err, tt.wantErr, tt.name)
 				return
 			}
 			if got != tt.want {
-				t.Errorf("GVKtoGVR() got = %v, want %v", got, tt.want)
+				t.Errorf("GVKtoGVR() got = %v, want %v - name: %s", got, tt.want, tt.name)
 			}
 		})
 	}

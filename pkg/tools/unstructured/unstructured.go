@@ -57,11 +57,13 @@ func IsAvailable(un *unstructured.Unstructured) (bool, error) {
 	return true, nil
 }
 
-func SetCondition(un *unstructured.Unstructured, co metav1.Condition) error {
-	conds := GetConditions(un)
-	condition.Upsert(&conds, co)
+func SetConditions(un *unstructured.Unstructured, conds ...metav1.Condition) error {
+	conditions := GetConditions(un)
+	for _, cond := range conds {
+		condition.Upsert(&conditions, cond)
+	}
 
-	res, err := encodeStruct(conds)
+	res, err := encodeStruct(conditions)
 	if err != nil {
 		return err
 	}
