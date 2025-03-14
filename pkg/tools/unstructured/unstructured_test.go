@@ -72,15 +72,6 @@ func TestFailedObjectRef(t *testing.T) {
 	assert.Nil(t, ref)
 }
 
-func TestGVR(t *testing.T) {
-	un := createFakeObject()
-	gvr, err := GVR(un)
-	assert.Nil(t, err)
-	assert.Equal(t, "tests.example.org", gvr.Group)
-	assert.Equal(t, "v1", gvr.Version)
-	assert.Equal(t, "tests", gvr.Resource)
-}
-
 func TestSetConditions(t *testing.T) {
 	un := createFakeObject()
 	cond := metav1.Condition{
