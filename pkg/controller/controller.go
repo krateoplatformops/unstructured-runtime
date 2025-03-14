@@ -73,7 +73,7 @@ type Options struct {
 	ExternalClient    ExternalClient
 	ListWatcher       ListWatcherConfiguration
 	Pluralizer        pluralizer.PluralizerInterface
-	GlobalRateLimiter workqueue.TypedRateLimiter[ctrlevent.Event]
+	GlobalRateLimiter workqueue.TypedRateLimiter[any]
 }
 
 type Controller struct {
@@ -81,7 +81,7 @@ type Controller struct {
 	dynamicClient   dynamic.Interface
 	discoveryClient discovery.DiscoveryInterface
 	gvr             schema.GroupVersionResource
-	queue           workqueue.TypedRateLimitingInterface[ctrlevent.Event]
+	queue           workqueue.TypedRateLimitingInterface[any]
 	items           *sync.Map
 	informer        cache.Controller
 	recorder        event.Recorder
@@ -90,17 +90,15 @@ type Controller struct {
 }
 
 func New(sid *shortid.Shortid, opts Options) *Controller {
-
 	if opts.GlobalRateLimiter == nil {
 		opts.GlobalRateLimiter = workqueue.NewTypedMaxOfRateLimiter(
-			workqueue.NewTypedItemExponentialFailureRateLimiter[ctrlevent.Event](3*time.Second, 180*time.Second),
+			workqueue.NewTypedItemExponentialFailureRateLimiter[any](3*time.Second, 180*time.Second),
 			// 10 qps, 100 bucket size.  This is only for retry speed and its only the overall factor (not per item)
-			&workqueue.TypedBucketRateLimiter[ctrlevent.Event]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+			&workqueue.TypedBucketRateLimiter[any]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
 		)
 	}
 
 	queue := workqueue.NewTypedRateLimitingQueue(opts.GlobalRateLimiter)
-	workqueue.NewTypedRateLimitingQueueWithConfig(opts.GlobalRateLimiter, workqueue.TypedRateLimitingQueueConfig[ctrlevent.Event]{})
 	items := &sync.Map{}
 
 	lw, err := listwatcher.Create(listwatcher.CreateOption{
@@ -123,20 +121,14 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 		Indexers:      cache.Indexers{},
 		Handler: cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
-				log := opts.Logger.WithValues("Action", "Add")
+				log := opts.Logger
 				el, ok := obj.(*unstructured.Unstructured)
 				if !ok {
 					log.Debug("Object is not an unstructured.")
 					return
 				}
 
-				id, err := sid.Generate()
-				if err != nil {
-					log.Debug(fmt.Errorf("generating short id: %w", err).Error())
-					return
-				}
 				item := ctrlevent.Event{
-					Id:        id,
 					EventType: ctrlevent.Observe,
 					ObjectRef: objectref.ObjectRef{
 						APIVersion: el.GetAPIVersion(),
@@ -148,11 +140,12 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				dig := ctrlevent.DigestForEvent(item)
 
 				if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-					queue.Add(item)
+					log.Debug("Adding Observe event to queue", "objectRef", item.ObjectRef.String())
+					queue.AddRateLimited(item)
 				}
 			},
 			UpdateFunc: func(old, new interface{}) {
-				log := opts.Logger.WithValues("Action", "Update")
+				log := opts.Logger
 				oldUns, ok := old.(*unstructured.Unstructured)
 				if !ok {
 					log.Debug("Object is not an unstructured.")
@@ -165,17 +158,10 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					return
 				}
 
-				id, err := sid.Generate()
-				if err != nil {
-					log.Debug(fmt.Errorf("generating short id: %w", err).Error())
-					return
-				}
-
 				if meta.WasDeleted(newUns) {
 					log.Debug(fmt.Sprintf("Object %s/%s is being deleted", newUns.GetNamespace(), newUns.GetName()))
 
 					item := ctrlevent.Event{
-						Id:        id,
 						EventType: ctrlevent.Delete,
 						ObjectRef: objectref.ObjectRef{
 							APIVersion: newUns.GetAPIVersion(),
@@ -188,7 +174,8 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					dig := ctrlevent.DigestForEvent(item)
 
 					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-						queue.Add(item)
+						log.Debug("Adding Delete event to queue", "objectRef", item.ObjectRef.String())
+						queue.AddRateLimited(item)
 					}
 					return
 				}
@@ -205,10 +192,8 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				}
 
 				diff := cmp.Diff(newSpec, oldSpec)
-				log.Debug(fmt.Sprintf("comparing current spec with desired spec: %s", diff))
 				if len(diff) > 0 {
 					item := ctrlevent.Event{
-						Id:        id,
 						EventType: ctrlevent.Update,
 						ObjectRef: objectref.ObjectRef{
 							APIVersion: newUns.GetAPIVersion(),
@@ -220,11 +205,11 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					dig := ctrlevent.DigestForEvent(item)
 
 					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-						queue.Add(item)
+						log.Debug("Adding Update event to queue", "objectRef", item.ObjectRef.String())
+						queue.AddRateLimited(item)
 					}
 				} else {
 					item := ctrlevent.Event{
-						Id:        id,
 						EventType: ctrlevent.Observe,
 						ObjectRef: objectref.ObjectRef{
 							APIVersion: newUns.GetAPIVersion(),
@@ -239,14 +224,15 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					if _, loaded := items.Load(dig); !loaded {
 						items.Store(dig, struct{}{})
 						time.AfterFunc(opts.ResyncInterval, func() {
-							queue.Add(item)
+							log.Debug("Adding Observe event to queue", "objectRef", item.ObjectRef.String())
+							queue.AddRateLimited(item)
 						})
 					}
 				}
 
 			},
 			DeleteFunc: func(obj interface{}) {
-				log := opts.Logger.WithValues("Action", "Delete")
+				log := opts.Logger
 				el, ok := obj.(*unstructured.Unstructured)
 				if !ok {
 					log.Debug("Object is not an unstructured")
@@ -264,14 +250,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					return
 				}
 
-				id, err := sid.Generate()
-				if err != nil {
-					log.Debug(fmt.Errorf("generating short id: %w", err).Error())
-					return
-				}
-
 				item := ctrlevent.Event{
-					Id:        id,
 					EventType: ctrlevent.Delete,
 					ObjectRef: objectref.ObjectRef{
 						APIVersion: el.GetAPIVersion(),
@@ -283,7 +262,8 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				dig := ctrlevent.DigestForEvent(item)
 
 				if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-					queue.Add(item)
+					log.Debug("Adding Delete event to queue", "objectRef", item.ObjectRef.String())
+					queue.AddRateLimited(item)
 				}
 			},
 		},

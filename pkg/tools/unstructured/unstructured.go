@@ -11,9 +11,6 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured/condition"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/gengo/namer"
-	"k8s.io/gengo/types"
 )
 
 type NotAvailableError struct {
@@ -162,20 +159,6 @@ func ExtractFailedObjectRef(un *unstructured.Unstructured) (*objectref.ObjectRef
 func UnsetFailedObjectRef(un *unstructured.Unstructured) {
 	removeNestedField(un, "status", "failedObjectRef")
 }
-
-func GVR(un *unstructured.Unstructured) (schema.GroupVersionResource, error) {
-	gv, err := schema.ParseGroupVersion(un.GetAPIVersion())
-	if err != nil {
-		return schema.GroupVersionResource{}, err
-	}
-
-	kind := types.Type{Name: types.Name{Name: un.GetKind()}}
-	namer := namer.NewPrivatePluralNamer(nil)
-	resource := strings.ToLower(namer.Name(&kind))
-
-	return gv.WithResource(resource), nil
-}
-
 func setNestedFieldNoCopy(uns *unstructured.Unstructured, value interface{}, fields ...string) error {
 	m := uns.Object
 
