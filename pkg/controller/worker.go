@@ -70,14 +70,22 @@ func (c *Controller) runWorker(ctx context.Context) {
 			break
 		}
 
-		dig := ctrlevent.DigestForEvent(obj)
+		ev, ok := obj.(ctrlevent.Event)
+		if !ok {
+			c.queue.Forget(obj)
+			c.queue.Done(obj)
+			runtime.HandleError(fmt.Errorf("unexpected object in queue: %v", obj))
 
+			continue
+		}
+
+		dig := ctrlevent.DigestForEvent(ev)
+
+		err := c.processItem(ctx, ev)
 		c.items.Delete(dig)
-		c.queue.Forget(obj)
-		c.queue.Done(obj)
-
-		err := c.processItem(ctx, obj)
-		c.handleErr(err, obj)
+		c.queue.Forget(ev)
+		c.queue.Done(ev)
+		c.handleErr(err, ev)
 	}
 }
 
@@ -86,21 +94,11 @@ func (c *Controller) handleErr(err error, obj ctrlevent.Event) {
 		return
 	}
 
-	if retries := c.queue.NumRequeues(obj); retries < maxRetries {
-		c.logger.WithValues("retries", retries).
-			WithValues("obj", fmt.Sprintf("%v", obj.EventType)).
-			Debug("processing event, retrying", "error", err)
+	c.logger.WithValues("retries", c.queue.NumRequeues(obj)).
+		WithValues("obj", fmt.Sprintf("%v", obj.EventType)).
+		Debug("processing event, retrying", "error", err)
 
-		dig := ctrlevent.DigestForEvent(obj)
-
-		if _, loaded := c.items.LoadOrStore(dig, struct{}{}); !loaded {
-			c.queue.Add(obj)
-		}
-		return
-	}
-
-	c.logger.Debug("error processing event (max retries reached)", "error", err)
-	runtime.HandleError(err)
+	c.queue.AddRateLimited(obj)
 }
 
 func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
@@ -134,7 +132,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 		}
 	}
 
-	if meta.WasDeleted(el) {
+	if !meta.WasDeleted(el) {
 		finalizers := el.GetFinalizers()
 		exist := slices.Contains(finalizers, finalizerName)
 
@@ -146,9 +144,16 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 				return err
 			}
 		}
-	} else {
-		c.handleDelete(ctx, evt.ObjectRef)
 	}
+	// else if meta.ShouldDelete(el) {
+	// 	c.logger.Debug("processing deletion", "objectRef", evt.ObjectRef.String())
+	// 	err = c.handleDelete(ctx, evt.ObjectRef)
+	// 	if err != nil {
+	// 		c.logger.Debug("deleting", "error", err)
+	// 		return err
+	// 	}
+	// 	return nil
+	// }
 
 	c.logger.Debug("processing", "objectRef", evt.ObjectRef.String())
 	switch evt.EventType {
@@ -210,12 +215,6 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 			log.Debug("Resolving unstructured object")
 			return err
 		}
-
-		// err = unstructuredtools.SetConditions(e, condition.FailWithReason(fmt.Sprintf("failed to observe object: %s", actionErr)))
-		// if err != nil {
-		// 	c.logger.Debug("Observe: setting condition", "error", err)
-		// 	return err
-		// }
 
 		err = unstructuredtools.SetConditions(e, condition.ReconcileError(errors.Wrap(actionErr, errReconcileObserve)))
 		if err != nil {
@@ -302,9 +301,16 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 		return nil
 	}
 
+	el, err = c.fetch(ctx, ref, false)
+	if err != nil {
+		log.Debug("Resolving unstructured object")
+		return err
+	}
+
 	actionErr := c.externalClient.Create(ctx, el)
 	if actionErr != nil {
 		c.recorder.Event(el, event.Warning(reasonCannotCreate, actionErr))
+		log.Debug("Cannot create external resource", "error", actionErr)
 		e, err := c.fetch(ctx, ref, false)
 		if err != nil {
 			log.Debug("Resolving unstructured object")
@@ -326,6 +332,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 			return err
 		}
 
+		return actionErr
 	}
 
 	log.Debug("Successfully requested creation of external resource")
@@ -397,6 +404,8 @@ func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) 
 			log.Debug("Cannot update status", "error", err)
 			return err
 		}
+
+		return actionErr
 	}
 
 	log.Debug("Successfully requested update of external resource")

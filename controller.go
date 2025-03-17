@@ -3,8 +3,6 @@ package controller
 import (
 	"time"
 
-	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
-
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/eventrecorder"
@@ -19,18 +17,18 @@ import (
 )
 
 type Options struct {
-	Debug             bool                                        `json:"debug"`
-	ProviderName      string                                      `json:"providerName"`
-	Pluralizer        pluralizer.PluralizerInterface              `json:"pluralizer"`
-	GVR               schema.GroupVersionResource                 `json:"gvr"`
-	Client            dynamic.Interface                           `json:"client"`
-	Discovery         discovery.CachedDiscoveryInterface          `json:"discovery"`
-	Namespace         string                                      `json:"namespace"`
-	Config            *rest.Config                                `json:"config"`
-	ResyncInterval    time.Duration                               `json:"resyncInterval"`
-	Logger            logging.Logger                              `json:"logger"`
-	ListWatcher       controller.ListWatcherConfiguration         `json:"listWatcher"`
-	GlobalRateLimiter workqueue.TypedRateLimiter[ctrlevent.Event] `json:"globalRateLimiter"`
+	Debug             bool                                `json:"debug"`
+	ProviderName      string                              `json:"providerName"`
+	Pluralizer        pluralizer.PluralizerInterface      `json:"pluralizer"`
+	GVR               schema.GroupVersionResource         `json:"gvr"`
+	Client            dynamic.Interface                   `json:"client"`
+	Discovery         discovery.CachedDiscoveryInterface  `json:"discovery"`
+	Namespace         string                              `json:"namespace"`
+	Config            *rest.Config                        `json:"config"`
+	ResyncInterval    time.Duration                       `json:"resyncInterval"`
+	Logger            logging.Logger                      `json:"logger"`
+	ListWatcher       controller.ListWatcherConfiguration `json:"listWatcher"`
+	GlobalRateLimiter workqueue.TypedRateLimiter[any]     `json:"globalRateLimiter"`
 }
 
 func New(opts Options) *controller.Controller {

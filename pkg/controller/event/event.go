@@ -14,7 +14,6 @@ const (
 )
 
 type Event struct {
-	Id        string
 	EventType EventType
 	ObjectRef objectref.ObjectRef
 }
