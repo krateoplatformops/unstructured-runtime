@@ -437,7 +437,7 @@ func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) 
 	actionErr := c.externalClient.Delete(ctx, el)
 	if actionErr != nil {
 		log.Debug("Cannot delete external resource", "error", actionErr)
-		c.recorder.Event(el, event.Warning(reasonCannotDelete, err))
+		c.recorder.Event(el, event.Warning(reasonCannotDelete, actionErr))
 
 		err := unstructuredtools.SetConditions(el, condition.Deleting(), condition.ReconcileError(errors.Wrap(actionErr, errReconcileDelete)))
 		if err != nil {
