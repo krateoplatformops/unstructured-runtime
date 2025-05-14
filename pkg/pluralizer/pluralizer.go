@@ -1,11 +1,8 @@
 package pluralizer
 
 import (
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-
+	"github.com/krateoplatformops/plumbing/cache"
+	"github.com/krateoplatformops/plumbing/kubeutil/plurals"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -20,45 +17,26 @@ type PluralizerInterface interface {
 }
 
 type Pluralizer struct {
-	urlPlurals *string
-	cli        *http.Client
+	cache *cache.TTLCache[string, plurals.Info]
 }
 
-func New(urlPlurals *string, cli *http.Client) *Pluralizer {
+func New() *Pluralizer {
 	return &Pluralizer{
-		urlPlurals: urlPlurals,
-		cli:        cli,
+		cache: cache.NewTTL[string, plurals.Info](),
 	}
 }
 
 func (p Pluralizer) GVKtoGVR(gvk schema.GroupVersionKind) (schema.GroupVersionResource, error) {
-	if p.urlPlurals == nil {
-		return schema.GroupVersionResource{}, fmt.Errorf("urlplurals is nil")
-	}
-
-	url := fmt.Sprintf("%s?kind=%s&apiVersion=%s", *p.urlPlurals, gvk.Kind, fmt.Sprintf("%s/%s", gvk.Group, gvk.Version))
-	resp, err := p.cli.Get(url)
+	info, err := plurals.Get(gvk, plurals.GetOptions{
+		Cache: p.cache,
+	})
 	if err != nil {
-		return schema.GroupVersionResource{}, fmt.Errorf("getting urlplurals: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return schema.GroupVersionResource{}, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-	names := names{}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return schema.GroupVersionResource{}, fmt.Errorf("reading response body: %w", err)
-	}
-	resp.Body.Close()
-
-	err = json.Unmarshal(body, &names)
-	if err != nil {
-		return schema.GroupVersionResource{}, fmt.Errorf("unmarshalling response body: %w", err)
+		return schema.GroupVersionResource{}, err
 	}
 
 	return schema.GroupVersionResource{
 		Group:    gvk.Group,
 		Version:  gvk.Version,
-		Resource: names.Plural,
+		Resource: info.Plural,
 	}, nil
 }

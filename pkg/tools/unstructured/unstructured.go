@@ -45,7 +45,7 @@ func IsAvailable(un *unstructured.Unstructured) (bool, error) {
 						Name:       un.GetName(),
 						Namespace:  un.GetNamespace(),
 					},
-					Err: fmt.Errorf(co.Reason),
+					Err: fmt.Errorf("%s", co.Reason),
 				}
 			}
 		}

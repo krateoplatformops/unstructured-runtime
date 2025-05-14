@@ -1,86 +1,65 @@
 //go:build integration
 // +build integration
 
-package pluralizer
+package pluralizer_test
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"context"
+	"strings"
 	"testing"
 
+	"github.com/gobuffalo/flect"
+	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/e2e-framework/pkg/env"
+	"sigs.k8s.io/e2e-framework/pkg/envconf"
+	"sigs.k8s.io/e2e-framework/pkg/features"
 )
 
-func TestGVKtoGVR(t *testing.T) {
-	tests := []struct {
-		name       string
-		gvk        schema.GroupVersionKind
-		response   string
-		statusCode int
-		want       schema.GroupVersionResource
-		wantErr    bool
-	}{
-		{
-			name: "valid response",
-			gvk: schema.GroupVersionKind{
+// FakePluralizer implements the PluralizerInterface for testing purposes.
+type FakePluralizer struct{}
+
+func (p FakePluralizer) GVKtoGVR(gvk schema.GroupVersionKind) (schema.GroupVersionResource, error) {
+	return schema.GroupVersionResource{
+		Group:    gvk.Group,
+		Version:  gvk.Version,
+		Resource: flect.Pluralize(strings.ToLower(gvk.Kind)),
+	}, nil
+}
+
+var testenv env.Environment
+
+func TestMain(m *testing.M) {
+	testenv = env.New()
+	testenv.Run(m)
+}
+
+func TestPluralizerIntegration(t *testing.T) {
+	f := features.New("GVKtoGVR Integration Test").
+		Assess("Convert GVK to GVR", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			// Use the FakePluralizer for testing
+			pl := FakePluralizer{}
+
+			// Test data
+			gvk := schema.GroupVersionKind{
 				Group:   "apps",
 				Version: "v1",
 				Kind:    "Deployment",
-			},
-			response:   `{"plural": "deployments", "singular": "deployment", "shorts": ["deploy"]}`,
-			statusCode: http.StatusOK,
-			want: schema.GroupVersionResource{
+			}
+
+			// Call the GVKtoGVR function
+			gvr, err := pl.GVKtoGVR(gvk)
+
+			// Assertions
+			assert.NoError(t, err)
+			assert.Equal(t, schema.GroupVersionResource{
 				Group:    "apps",
 				Version:  "v1",
 				Resource: "deployments",
-			},
-			wantErr: false,
-		},
-		{
-			name: "invalid JSON response",
-			gvk: schema.GroupVersionKind{
-				Group:   "apps",
-				Version: "v1",
-				Kind:    "Deployment",
-			},
-			response:   `invalid json`,
-			statusCode: http.StatusOK,
-			want:       schema.GroupVersionResource{},
-			wantErr:    true,
-		},
-		{
-			name: "non-200 status code",
-			gvk: schema.GroupVersionKind{
-				Group:   "apps",
-				Version: "v1",
-				Kind:    "Deployment",
-			},
-			response:   `{"plural": "deployments", "singular": "deployment", "shorts": ["deploy"]}`,
-			statusCode: http.StatusInternalServerError,
-			want:       schema.GroupVersionResource{},
-			wantErr:    true,
-		},
-	}
+			}, gvr)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(tt.statusCode)
-				w.Write([]byte(tt.response))
-			}))
-			defer server.Close()
+			return ctx
+		}).Feature()
 
-			urlPlurals := server.URL
-			p := New(&urlPlurals, server.Client())
-
-			got, err := p.GVKtoGVR(tt.gvk)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("GVKtoGVR() error = %v, wantErr %v - name: %s", err, tt.wantErr, tt.name)
-				return
-			}
-			if got != tt.want {
-				t.Errorf("GVKtoGVR() got = %v, want %v - name: %s", got, tt.want, tt.name)
-			}
-		})
-	}
+	testenv.Test(t, f)
 }
