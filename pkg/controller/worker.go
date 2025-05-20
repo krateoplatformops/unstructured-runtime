@@ -13,6 +13,7 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/tools"
 	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured/condition"
+	"github.com/rs/zerolog/log"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -116,6 +117,24 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 	resourceCli := c.dynamicClient.Resource(c.gvr).Namespace(el.GetNamespace())
 
+	if meta.IsPaused(el) {
+		c.logger.WithValues("annotation", meta.AnnotationKeyReconciliationPaused).Debug("Reconciliation is paused via the pause annotation")
+		c.recorder.Event(el, event.Normal(reasonReconciliationPaused, "Reconciliation is paused via the pause annotation"))
+		err = unstructuredtools.SetConditions(el, condition.ReconcilePaused())
+		if err != nil {
+			c.logger.Debug("Cannot set condition", "error", err)
+		}
+
+		_, err := resourceCli.UpdateStatus(context.Background(), el, metav1.UpdateOptions{})
+		if err != nil {
+			log.Debug("Updating status", "error", err)
+			return err
+		}
+		// if the pause annotation is removed, we will have a chance to reconcile again and resume
+		// and if status update fails, we will reconcile again to retry to update the status
+		return nil
+	}
+
 	// If managed resource has a deletion timestamp and and a deletion policy of
 	// Orphan, we do not need to observe the external resource before attempting
 	// to remove finalizer.
@@ -145,15 +164,6 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 			}
 		}
 	}
-	// else if meta.ShouldDelete(el) {
-	// 	c.logger.Debug("processing deletion", "objectRef", evt.ObjectRef.String())
-	// 	err = c.handleDelete(ctx, evt.ObjectRef)
-	// 	if err != nil {
-	// 		c.logger.Debug("deleting", "error", err)
-	// 		return err
-	// 	}
-	// 	return nil
-	// }
 
 	c.logger.Debug("processing", "objectRef", evt.ObjectRef.String())
 	switch evt.EventType {
@@ -189,7 +199,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 		c.recorder.Event(el, event.Normal(reasonReconciliationPaused, "Reconciliation is paused via the pause annotation"))
 		err = unstructuredtools.SetConditions(el, condition.ReconcilePaused())
 		if err != nil {
-			log.Debug("Cannot set cond", "error", err)
+			log.Debug("Cannot set condition", "error", err)
 			return err
 		}
 
