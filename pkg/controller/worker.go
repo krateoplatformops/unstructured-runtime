@@ -13,7 +13,6 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/tools"
 	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured/condition"
-	"github.com/rs/zerolog/log"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -127,7 +126,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 		_, err := resourceCli.UpdateStatus(context.Background(), el, metav1.UpdateOptions{})
 		if err != nil {
-			log.Debug("Updating status", "error", err)
+			c.logger.Debug("Updating status", "error", err)
 			return err
 		}
 		// if the pause annotation is removed, we will have a chance to reconcile again and resume
