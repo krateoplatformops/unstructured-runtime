@@ -119,6 +119,13 @@ func init() {
 }
 
 func New(sid *shortid.Shortid, opts Options) *Controller {
+	if opts.Client == nil {
+		return nil
+	}
+	if opts.Discovery == nil {
+		return nil
+	}
+
 	if opts.GlobalRateLimiter == nil {
 		opts.GlobalRateLimiter = workqueue.NewTypedMaxOfRateLimiter(
 			workqueue.NewTypedItemExponentialFailureRateLimiter[any](3*time.Second, 180*time.Second),
