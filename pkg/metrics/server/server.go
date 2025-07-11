@@ -99,7 +99,7 @@ type Options struct {
 type Filter func(log logging.Logger, handler http.Handler) (http.Handler, error)
 
 // NewServer constructs a new metrics.Server from the provided options.
-func NewServer(o Options, config *rest.Config, httpClient *http.Client, log logging.Logger) (Server, error) {
+func NewServer(o Options, config *rest.Config, httpClient *http.Client) (Server, error) {
 	o.setDefaults()
 
 	// Skip server creation if metrics are disabled.

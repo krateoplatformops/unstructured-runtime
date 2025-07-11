@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	metricsserver "github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
+
 	"github.com/google/go-cmp/cmp"
 	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
@@ -80,9 +82,11 @@ type Options struct {
 	ListWatcher       ListWatcherConfiguration
 	Pluralizer        pluralizer.PluralizerInterface
 	GlobalRateLimiter workqueue.TypedRateLimiter[any]
+	MetricsServer     metricsserver.Server
 }
 
 type Controller struct {
+	metricsServer   metricsserver.Server
 	pluralizer      pluralizer.PluralizerInterface
 	dynamicClient   dynamic.Interface
 	discoveryClient discovery.DiscoveryInterface
@@ -373,7 +377,6 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						"namespace", item.ObjectRef.Namespace,
 						"queuedAt", item.QueuedAt,
 					).Debug("Adding Delete event to queue")
-					// queue.AddRateLimited(item)
 					queue.AddWithOpts(priorityqueue.AddOpts{
 						RateLimited: false,
 						Priority:    HighPriority,
@@ -407,6 +410,13 @@ func (c *Controller) Run(ctx context.Context, numWorkers int) error {
 
 	c.logger.Info("Starting controller")
 	go c.informer.Run(ctx.Done())
+
+	// Start metrics server in goroutine so it doesn't block
+	go func() {
+		if err := c.metricsServer.WithLogger(c.logger).Start(ctx); err != nil {
+			c.logger.Error(err, "metrics server failed")
+		}
+	}()
 
 	// Wait for all involved caches to be synced, before
 	// processing items from the queue is started

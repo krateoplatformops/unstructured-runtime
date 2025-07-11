@@ -2,16 +2,15 @@ package controller
 
 import (
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/eventrecorder"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
+	metricsserver "github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/shortid"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -32,8 +31,7 @@ type Options struct {
 	Logger            logging.Logger                      `json:"logger"`
 	ListWatcher       controller.ListWatcherConfiguration `json:"listWatcher"`
 	GlobalRateLimiter workqueue.TypedRateLimiter[any]     `json:"globalRateLimiter"`
-	MetricsAddr       string                              `json:"metricsAddr"`
-	MetricsPort       int                                 `json:"metricsPort"`
+	Metrics           metricsserver.Options               `json:"metrics"`
 }
 
 func New(opts Options) *controller.Controller {
@@ -44,6 +42,12 @@ func New(opts Options) *controller.Controller {
 
 	rec, err := eventrecorder.Create(opts.Config)
 	if err != nil {
+		return nil
+	}
+
+	metricsServer, err := metricsserver.NewServer(opts.Metrics, opts.Config, http.DefaultClient)
+	if err != nil {
+		opts.Logger.Error(err, "failed to create metrics server")
 		return nil
 	}
 
@@ -58,22 +62,8 @@ func New(opts Options) *controller.Controller {
 		Logger:            opts.Logger,
 		ListWatcher:       opts.ListWatcher,
 		GlobalRateLimiter: opts.GlobalRateLimiter,
+		MetricsServer:     metricsServer,
 	})
-
-	// Start metrics server if configured
-	if opts.MetricsAddr != "" && opts.MetricsPort > 0 {
-		go func() {
-			mux := http.NewServeMux()
-			mux.Handle("/metrics", promhttp.Handler())
-
-			addr := opts.MetricsAddr + ":" + strconv.Itoa(opts.MetricsPort)
-			opts.Logger.Info("Starting metrics server", "addr", addr)
-
-			if err := http.ListenAndServe(addr, mux); err != nil {
-				opts.Logger.Error(err, "Metrics server failed")
-			}
-		}()
-	}
 
 	return ctrl
 }
