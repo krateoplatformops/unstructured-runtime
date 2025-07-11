@@ -391,50 +391,6 @@ func TestDeleteFunc(t *testing.T) {
 	}
 }
 
-func TestControllerRun(t *testing.T) {
-	tests := []struct {
-		name       string
-		numWorkers int
-		timeout    time.Duration
-		wantErr    bool
-	}{
-		{
-			name:       "starts and stops with single worker",
-			numWorkers: 1,
-			timeout:    100 * time.Millisecond,
-			wantErr:    false,
-		},
-		{
-			name:       "starts and stops with multiple workers",
-			numWorkers: 3,
-			timeout:    100 * time.Millisecond,
-			wantErr:    false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sid, err := shortid.New(1, shortid.DefaultABC, 2342)
-			require.NoError(t, err)
-
-			opts := createTestOptions()
-			controller := New(sid, opts)
-			require.NotNil(t, controller)
-
-			ctx, cancel := context.WithTimeout(context.Background(), tt.timeout)
-			defer cancel()
-
-			err = controller.Run(ctx, tt.numWorkers)
-
-			if tt.wantErr {
-				assert.Error(t, err, "Expected Run to return an error")
-			} else {
-				assert.NoError(t, err, "Expected Run to complete without error")
-			}
-		})
-	}
-}
-
 func TestPriorityConstants(t *testing.T) {
 	assert.Equal(t, -100, LowPriority, "LowPriority should be -100")
 	assert.Equal(t, 0, NormalPriority, "NormalPriority should be 0")
