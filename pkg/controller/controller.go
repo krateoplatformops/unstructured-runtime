@@ -396,6 +396,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 		queue:           queue,
 		externalClient:  opts.ExternalClient,
 		pluralizer:      opts.Pluralizer,
+		metricsServer:   opts.MetricsServer,
 	}
 }
 
