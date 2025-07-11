@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
@@ -9,6 +11,7 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/shortid"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -29,6 +32,8 @@ type Options struct {
 	Logger            logging.Logger                      `json:"logger"`
 	ListWatcher       controller.ListWatcherConfiguration `json:"listWatcher"`
 	GlobalRateLimiter workqueue.TypedRateLimiter[any]     `json:"globalRateLimiter"`
+	MetricsAddr       string                              `json:"metricsAddr"`
+	MetricsPort       int                                 `json:"metricsPort"`
 }
 
 func New(opts Options) *controller.Controller {
@@ -42,7 +47,7 @@ func New(opts Options) *controller.Controller {
 		return nil
 	}
 
-	return controller.New(sid, controller.Options{
+	ctrl := controller.New(sid, controller.Options{
 		Pluralizer:        opts.Pluralizer,
 		Client:            opts.Client,
 		Discovery:         opts.Discovery,
@@ -54,4 +59,21 @@ func New(opts Options) *controller.Controller {
 		ListWatcher:       opts.ListWatcher,
 		GlobalRateLimiter: opts.GlobalRateLimiter,
 	})
+
+	// Start metrics server if configured
+	if opts.MetricsAddr != "" && opts.MetricsPort > 0 {
+		go func() {
+			mux := http.NewServeMux()
+			mux.Handle("/metrics", promhttp.Handler())
+
+			addr := opts.MetricsAddr + ":" + strconv.Itoa(opts.MetricsPort)
+			opts.Logger.Info("Starting metrics server", "addr", addr)
+
+			if err := http.ListenAndServe(addr, mux); err != nil {
+				opts.Logger.Error(err, "Metrics server failed")
+			}
+		}()
+	}
+
+	return ctrl
 }

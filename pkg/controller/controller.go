@@ -9,6 +9,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/priorityqueue"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/listwatcher"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
@@ -17,6 +18,7 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/shortid"
 	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured/condition"
+	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/time/rate"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -32,6 +34,10 @@ const (
 	reasonReconciliationPaused event.Reason = "ReconciliationPaused"
 	reasonReconciliationFailed event.Reason = "ReconciliationFailed"
 )
+
+const LowPriority = -100 //Lowest priority for the priorityqueue
+const NormalPriority = 0 //Lowest priority for the priorityqueue
+const HighPriority = 10  //Lowest priority for the priorityqueue
 
 // An ExternalClient manages the lifecycle of an external resource.
 // None of the calls here should be blocking. All of the calls should be
@@ -81,12 +87,35 @@ type Controller struct {
 	dynamicClient   dynamic.Interface
 	discoveryClient discovery.DiscoveryInterface
 	gvr             schema.GroupVersionResource
-	queue           workqueue.TypedRateLimitingInterface[any]
+	queue           priorityqueue.PriorityQueue[any]
 	items           *sync.Map
 	informer        cache.Controller
 	recorder        event.Recorder
 	logger          logging.Logger
 	externalClient  ExternalClient
+}
+
+var (
+	reconcileTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "controller_reconcile_total",
+			Help: "Total number of reconciliations",
+		},
+		[]string{"kind", "namespace", "result"},
+	)
+
+	reconcileDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "controller_reconcile_duration_seconds",
+			Help: "Time spent reconciling",
+		},
+		[]string{"kind", "namespace"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(reconcileTotal)
+	prometheus.MustRegister(reconcileDuration)
 }
 
 func New(sid *shortid.Shortid, opts Options) *Controller {
@@ -98,7 +127,10 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 		)
 	}
 
-	queue := workqueue.NewTypedRateLimitingQueue(opts.GlobalRateLimiter)
+	// queue := workqueue.NewTypedRateLimitingQueue(opts.GlobalRateLimiter)
+	queue := priorityqueue.New("controller", func(o *priorityqueue.Opts[any]) {
+		o.RateLimiter = opts.GlobalRateLimiter
+	})
 	items := &sync.Map{}
 
 	lw, err := listwatcher.Create(listwatcher.CreateOption{
@@ -136,12 +168,35 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						Name:       el.GetName(),
 						Namespace:  el.GetNamespace(),
 					},
+					QueuedAt: time.Now(),
 				}
 				dig := ctrlevent.DigestForEvent(item)
 
+				// Checking if the object is already being processed
+				priority := HighPriority
+				annotations := el.GetAnnotations()
+				if annotations == nil {
+					priority = HighPriority
+				}
+				_, ok = annotations[meta.AnnotationKeyExternalCreateFailed]
+				_, ok_pending := annotations[meta.AnnotationKeyExternalCreatePending]
+				_, ok_succeded := annotations[meta.AnnotationKeyExternalCreateSucceeded]
+				if ok || ok_pending || ok_succeded {
+					priority = NormalPriority //These are events that are already being processed, so we can lower the priority
+				}
+
 				if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-					log.Debug("Adding Observe event to queue", "objectRef", item.ObjectRef.String())
-					queue.AddRateLimited(item)
+					log.WithValues(
+						"kind", item.ObjectRef.Kind,
+						"apiVersion", item.ObjectRef.APIVersion,
+						"name", item.ObjectRef.Name,
+						"namespace", item.ObjectRef.Namespace,
+						"queuedAt", item.QueuedAt,
+					).Debug("Adding Observe event to queue", "priority", priority)
+					queue.AddWithOpts(priorityqueue.AddOpts{
+						RateLimited: false,
+						Priority:    priority,
+					}, item)
 				}
 			},
 			UpdateFunc: func(old, new interface{}) {
@@ -169,14 +224,34 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 							Name:       newUns.GetName(),
 							Namespace:  newUns.GetNamespace(),
 						},
+						QueuedAt: time.Now(),
 					}
 
 					dig := ctrlevent.DigestForEvent(item)
 
 					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-						log.Debug("Adding Delete event to queue", "objectRef", item.ObjectRef.String())
-						queue.AddRateLimited(item)
+						log.WithValues(
+							"kind", item.ObjectRef.Kind,
+							"apiVersion", item.ObjectRef.APIVersion,
+							"name", item.ObjectRef.Name,
+							"namespace", item.ObjectRef.Namespace,
+							"queuedAt", item.QueuedAt,
+						).Debug("Adding Delete event to queue", "priority", HighPriority)
+						queue.AddWithOpts(priorityqueue.AddOpts{
+							RateLimited: false,
+							Priority:    HighPriority,
+						}, item)
 					}
+					return
+				}
+
+				//Checking Krateo Annotations - "krateo.io/paused"
+				if meta.IsPaused(newUns) && !meta.IsPaused(oldUns) {
+					log.Debug(fmt.Sprintf("Reconciliation is paused via the pause annotation %s: %s; %s: %s", "annotation", meta.AnnotationKeyReconciliationPaused, "value", "true"))
+					opts.Recorder.Event(newUns, event.Normal(reasonReconciliationPaused, "Reconciliation is paused via the pause annotation"))
+					unstructuredtools.SetConditions(newUns, condition.ReconcilePaused())
+					// if the pause annotation is removed, we will have a chance to reconcile again and resume
+					// and if status update fails, we will reconcile again to retry to update the status
 					return
 				}
 
@@ -200,13 +275,24 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 							Kind:       newUns.GetKind(),
 							Name:       newUns.GetName(),
 							Namespace:  newUns.GetNamespace(),
-						}}
+						},
+						QueuedAt: time.Now(),
+					}
 
 					dig := ctrlevent.DigestForEvent(item)
 
 					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-						log.Debug("Adding Update event to queue", "objectRef", item.ObjectRef.String())
-						queue.AddRateLimited(item)
+						log.WithValues(
+							"kind", item.ObjectRef.Kind,
+							"apiVersion", item.ObjectRef.APIVersion,
+							"name", item.ObjectRef.Name,
+							"namespace", item.ObjectRef.Namespace,
+							"queuedAt", item.QueuedAt,
+						).Debug("Adding Update event to queue", "priority", HighPriority)
+						queue.AddWithOpts(priorityqueue.AddOpts{
+							RateLimited: false,
+							Priority:    HighPriority,
+						}, item)
 					}
 				} else {
 					item := ctrlevent.Event{
@@ -217,6 +303,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 							Name:       newUns.GetName(),
 							Namespace:  newUns.GetNamespace(),
 						},
+						QueuedAt: time.Now(),
 					}
 
 					dig := ctrlevent.DigestForEvent(item)
@@ -224,8 +311,17 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					if _, loaded := items.Load(dig); !loaded {
 						items.Store(dig, struct{}{})
 						time.AfterFunc(opts.ResyncInterval, func() {
-							log.Debug("Adding Observe event to queue", "objectRef", item.ObjectRef.String())
-							queue.AddRateLimited(item)
+							log.WithValues(
+								"kind", item.ObjectRef.Kind,
+								"apiVersion", item.ObjectRef.APIVersion,
+								"name", item.ObjectRef.Name,
+								"namespace", item.ObjectRef.Namespace,
+								"queuedAt", item.QueuedAt,
+							).Debug("Adding Observe event to queue")
+							queue.AddWithOpts(priorityqueue.AddOpts{
+								RateLimited: true,
+								Priority:    LowPriority,
+							}, item)
 						})
 					}
 				}
@@ -258,12 +354,23 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						Name:       el.GetName(),
 						Namespace:  el.GetNamespace(),
 					},
+					QueuedAt: time.Now(),
 				}
 				dig := ctrlevent.DigestForEvent(item)
 
 				if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-					log.Debug("Adding Delete event to queue", "objectRef", item.ObjectRef.String())
-					queue.AddRateLimited(item)
+					log.WithValues(
+						"kind", item.ObjectRef.Kind,
+						"apiVersion", item.ObjectRef.APIVersion,
+						"name", item.ObjectRef.Name,
+						"namespace", item.ObjectRef.Namespace,
+						"queuedAt", item.QueuedAt,
+					).Debug("Adding Delete event to queue")
+					// queue.AddRateLimited(item)
+					queue.AddWithOpts(priorityqueue.AddOpts{
+						RateLimited: false,
+						Priority:    HighPriority,
+					}, item)
 				}
 			},
 		},
