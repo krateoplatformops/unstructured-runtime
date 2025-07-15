@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -34,13 +35,13 @@ type Options struct {
 	Metrics           metricsserver.Options               `json:"metrics"`
 }
 
-func New(opts Options) *controller.Controller {
+func New(ctx context.Context, opts Options) *controller.Controller {
 	sid, err := shortid.New(1, shortid.DefaultABC, 2342)
 	if err != nil {
 		logging.NewNopLogger().Info("failed to create shortid", "err", err)
 	}
 
-	rec, err := eventrecorder.Create(opts.Config)
+	rec, err := eventrecorder.Create(ctx, opts.Config)
 	if err != nil {
 		return nil
 	}
