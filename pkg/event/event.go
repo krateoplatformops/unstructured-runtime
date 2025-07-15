@@ -3,14 +3,13 @@ package event
 
 import (
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	record "k8s.io/client-go/tools/events"
 )
 
 // A Type of event.
 type Type string
 
-// Event types. See below for valid types.
-// https://godoc.org/k8s.io/client-go/tools/record#EventRecorder
+// Types of events.
 var (
 	TypeNormal  Type = "Normal"
 	TypeWarning Type = "Warning"
@@ -21,75 +20,79 @@ type Reason string
 
 // An Event relating to a custom resource.
 type Event struct {
-	Type        Type
-	Reason      Reason
-	Message     string
-	Annotations map[string]string
+	Type    Type           // Type of this event (Normal, Warning), new types could be added in the future.
+	Related runtime.Object // 'related' is the secondary object for more complex actions. E.g. when regarding object triggers a creation or deletion of related object.
+	Reason  Reason         // Why the action was taken.
+	Message string         // A human-readable description of the status of this operation. Maximal length of the note is 1kB, but libraries should be prepared to handle values up to 64kB.
+	Action  string         // What action was taken/failed regarding to the regarding object.
+}
+
+type EventOption func(*Event)
+
+func WithAction(action string) EventOption {
+	return func(e *Event) {
+		e.Action = action
+	}
+}
+
+func WithRelated(related runtime.Object) EventOption {
+	return func(e *Event) {
+		e.Related = related
+	}
 }
 
 // Normal returns a normal, informational event.
-func Normal(r Reason, message string, keysAndValues ...string) Event {
+func Normal(r Reason, message string, opts ...EventOption) Event {
 	e := Event{
-		Type:        TypeNormal,
-		Reason:      r,
-		Message:     message,
-		Annotations: map[string]string{},
+		Type:    TypeNormal,
+		Reason:  r,
+		Message: message,
 	}
-	sliceMap(keysAndValues, e.Annotations)
+
+	for _, opt := range opts {
+		opt(&e)
+	}
+
 	return e
 }
 
 // Warning returns a warning event, typically due to an error.
-func Warning(r Reason, err error, keysAndValues ...string) Event {
+func Warning(r Reason, err error, opts ...EventOption) Event {
 	e := Event{
-		Type:        TypeWarning,
-		Reason:      r,
-		Message:     err.Error(),
-		Annotations: map[string]string{},
+		Type:    TypeWarning,
+		Reason:  r,
+		Message: err.Error(),
 	}
-	sliceMap(keysAndValues, e.Annotations)
+
+	for _, opt := range opts {
+		opt(&e)
+	}
 	return e
 }
 
 // A Recorder records Kubernetes events.
 type Recorder interface {
 	Event(obj runtime.Object, e Event)
-	WithAnnotations(keysAndValues ...string) Recorder
 }
 
 // An APIRecorder records Kubernetes events to an API server.
 type APIRecorder struct {
-	kube        record.EventRecorder
-	annotations map[string]string
+	kube record.EventRecorder
 }
 
 // NewAPIRecorder returns an APIRecorder that records Kubernetes events to an
 // APIServer using the supplied EventRecorder.
 func NewAPIRecorder(r record.EventRecorder) *APIRecorder {
-	return &APIRecorder{kube: r, annotations: map[string]string{}}
+	if r == nil {
+		return nil
+	}
+
+	return &APIRecorder{kube: r}
 }
 
 // Event records the supplied event.
 func (r *APIRecorder) Event(obj runtime.Object, e Event) {
-	r.kube.AnnotatedEventf(obj, r.annotations, string(e.Type), string(e.Reason), e.Message)
-}
-
-// WithAnnotations returns a new *APIRecorder that includes the supplied
-// annotations with all recorded events.
-func (r *APIRecorder) WithAnnotations(keysAndValues ...string) Recorder {
-	ar := NewAPIRecorder(r.kube)
-	for k, v := range r.annotations {
-		ar.annotations[k] = v
-	}
-	sliceMap(keysAndValues, ar.annotations)
-	return ar
-}
-
-func sliceMap(from []string, to map[string]string) {
-	for i := 0; i+1 < len(from); i += 2 {
-		k, v := from[i], from[i+1]
-		to[k] = v
-	}
+	r.kube.Eventf(obj, e.Related, string(e.Type), string(e.Reason), e.Action, e.Message)
 }
 
 // A NopRecorder does nothing.
@@ -102,6 +105,3 @@ func NewNopRecorder() *NopRecorder {
 
 // Event does nothing.
 func (r *NopRecorder) Event(_ runtime.Object, _ Event) {}
-
-// WithAnnotations does nothing.
-func (r *NopRecorder) WithAnnotations(_ ...string) Recorder { return r }
