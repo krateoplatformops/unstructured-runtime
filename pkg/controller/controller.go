@@ -423,11 +423,13 @@ func (c *Controller) Run(ctx context.Context, numWorkers int) error {
 	go c.informer.Run(ctx.Done())
 
 	// Start metrics server in goroutine so it doesn't block
-	go func() {
-		if err := c.metricsServer.WithLogger(c.logger).Start(ctx); err != nil {
-			c.logger.Error(err, "metrics server failed")
-		}
-	}()
+	if c.metricsServer != nil {
+		go func() {
+			if err := c.metricsServer.WithLogger(c.logger).Start(ctx); err != nil {
+				c.logger.Error(err, "metrics server failed")
+			}
+		}()
+	}
 
 	// Wait for all involved caches to be synced, before
 	// processing items from the queue is started
