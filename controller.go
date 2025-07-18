@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/krateoplatformops/plumbing/kubeutil/event"
+	"github.com/krateoplatformops/plumbing/kubeutil/eventrecorder"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/event"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/eventrecorder"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	metricsserver "github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
@@ -41,7 +41,7 @@ func New(ctx context.Context, opts Options) *controller.Controller {
 		logging.NewNopLogger().Info("failed to create shortid", "err", err)
 	}
 
-	rec, err := eventrecorder.Create(ctx, opts.Config)
+	rec, err := eventrecorder.Create(ctx, opts.Config, "unstructured-runtime", nil)
 	if err != nil {
 		return nil
 	}

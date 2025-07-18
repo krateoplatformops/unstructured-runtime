@@ -9,17 +9,15 @@ import (
 	metricsserver "github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/krateoplatformops/plumbing/kubeutil/event"
 	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/priorityqueue"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/listwatcher"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/shortid"
-	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured/condition"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/time/rate"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -37,9 +35,9 @@ const (
 	reasonReconciliationFailed event.Reason = "ReconciliationFailed"
 )
 
-const LowPriority = -100 //Lowest priority for the priorityqueue
-const NormalPriority = 0 //Lowest priority for the priorityqueue
-const HighPriority = 10  //Lowest priority for the priorityqueue
+const LowPriority = -100 //Low priority for the priorityqueue
+const NormalPriority = 0 //Normal priority for the priorityqueue
+const HighPriority = 100 //High priority for the priorityqueue
 
 // An ExternalClient manages the lifecycle of an external resource.
 // None of the calls here should be blocking. All of the calls should be
@@ -138,7 +136,6 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 		)
 	}
 
-	// queue := workqueue.NewTypedRateLimitingQueue(opts.GlobalRateLimiter)
 	queue := priorityqueue.New("controller", func(o *priorityqueue.Opts[any]) {
 		o.RateLimiter = opts.GlobalRateLimiter
 	})
@@ -193,7 +190,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				_, ok_pending := annotations[meta.AnnotationKeyExternalCreatePending]
 				_, ok_succeded := annotations[meta.AnnotationKeyExternalCreateSucceeded]
 				if ok || ok_pending || ok_succeded {
-					priority = NormalPriority //These are events that are already being processed, so we can lower the priority
+					priority = LowPriority //These are events that are already being processed, so we can lower the priority
 				}
 
 				if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
@@ -258,11 +255,33 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 
 				//Checking Krateo Annotations - "krateo.io/paused"
 				if meta.IsPaused(newUns) && !meta.IsPaused(oldUns) {
-					log.Debug(fmt.Sprintf("Reconciliation is paused via the pause annotation %s: %s; %s: %s", "annotation", meta.AnnotationKeyReconciliationPaused, "value", "true"))
-					opts.Recorder.Event(newUns, event.Normal(reasonReconciliationPaused, "Reconciliation is paused via the pause annotation"))
-					unstructuredtools.SetConditions(newUns, condition.ReconcilePaused())
-					// if the pause annotation is removed, we will have a chance to reconcile again and resume
-					// and if status update fails, we will reconcile again to retry to update the status
+					log.Debug(fmt.Sprintf("Object %s/%s is paused", newUns.GetNamespace(), newUns.GetName()))
+
+					item := ctrlevent.Event{
+						EventType: ctrlevent.Observe,
+						ObjectRef: objectref.ObjectRef{
+							APIVersion: newUns.GetAPIVersion(),
+							Kind:       newUns.GetKind(),
+							Name:       newUns.GetName(),
+							Namespace:  newUns.GetNamespace(),
+						},
+						QueuedAt: time.Now(),
+					}
+
+					dig := ctrlevent.DigestForEvent(item)
+					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
+						log.WithValues(
+							"kind", item.ObjectRef.Kind,
+							"apiVersion", item.ObjectRef.APIVersion,
+							"name", item.ObjectRef.Name,
+							"namespace", item.ObjectRef.Namespace,
+							"queuedAt", item.QueuedAt,
+						).Debug("Adding Observe event to queue", "priority", LowPriority)
+						queue.AddWithOpts(priorityqueue.AddOpts{
+							RateLimited: true,
+							Priority:    NormalPriority,
+						}, item)
+					}
 					return
 				}
 
@@ -347,15 +366,6 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				}
 
 				log.Debug(fmt.Sprintf("Deleting object %s/%s", el.GetNamespace(), el.GetName()))
-
-				if meta.IsPaused(el) {
-					log.Debug(fmt.Sprintf("Reconciliation is paused via the pause annotation %s: %s; %s: %s", "annotation", meta.AnnotationKeyReconciliationPaused, "value", "true"))
-					opts.Recorder.Event(el, event.Normal(reasonReconciliationPaused, "Reconciliation is paused via the pause annotation"))
-					unstructuredtools.SetConditions(el, condition.ReconcilePaused())
-					// if the pause annotation is removed, we will have a chance to reconcile again and resume
-					// and if status update fails, we will reconcile again to retry to update the status
-					return
-				}
 
 				item := ctrlevent.Event{
 					EventType: ctrlevent.Delete,
