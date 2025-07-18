@@ -1,12 +1,15 @@
 package controller
 
 import (
+	"context"
+	"net/http"
 	"time"
 
+	"github.com/krateoplatformops/plumbing/kubeutil/event"
+	"github.com/krateoplatformops/plumbing/kubeutil/eventrecorder"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/event"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/eventrecorder"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
+	metricsserver "github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/shortid"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -29,20 +32,27 @@ type Options struct {
 	Logger            logging.Logger                      `json:"logger"`
 	ListWatcher       controller.ListWatcherConfiguration `json:"listWatcher"`
 	GlobalRateLimiter workqueue.TypedRateLimiter[any]     `json:"globalRateLimiter"`
+	Metrics           metricsserver.Options               `json:"metrics"`
 }
 
-func New(opts Options) *controller.Controller {
+func New(ctx context.Context, opts Options) *controller.Controller {
 	sid, err := shortid.New(1, shortid.DefaultABC, 2342)
 	if err != nil {
 		logging.NewNopLogger().Info("failed to create shortid", "err", err)
 	}
 
-	rec, err := eventrecorder.Create(opts.Config)
+	rec, err := eventrecorder.Create(ctx, opts.Config, "unstructured-runtime", nil)
 	if err != nil {
 		return nil
 	}
 
-	return controller.New(sid, controller.Options{
+	metricsServer, err := metricsserver.NewServer(opts.Metrics, opts.Config, http.DefaultClient)
+	if err != nil {
+		opts.Logger.Error(err, "failed to create metrics server")
+		return nil
+	}
+
+	ctrl := controller.New(sid, controller.Options{
 		Pluralizer:        opts.Pluralizer,
 		Client:            opts.Client,
 		Discovery:         opts.Discovery,
@@ -53,5 +63,8 @@ func New(opts Options) *controller.Controller {
 		Logger:            opts.Logger,
 		ListWatcher:       opts.ListWatcher,
 		GlobalRateLimiter: opts.GlobalRateLimiter,
+		MetricsServer:     metricsServer,
 	})
+
+	return ctrl
 }

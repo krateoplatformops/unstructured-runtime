@@ -1,6 +1,8 @@
 package event
 
 import (
+	"time"
+
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
 )
 
@@ -16,4 +18,5 @@ const (
 type Event struct {
 	EventType EventType
 	ObjectRef objectref.ObjectRef
+	QueuedAt  time.Time
 }
