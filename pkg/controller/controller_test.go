@@ -394,7 +394,7 @@ func TestDeleteFunc(t *testing.T) {
 func TestPriorityConstants(t *testing.T) {
 	assert.Equal(t, -100, LowPriority, "LowPriority should be -100")
 	assert.Equal(t, 0, NormalPriority, "NormalPriority should be 0")
-	assert.Equal(t, 10, HighPriority, "HighPriority should be 10")
+	assert.Equal(t, 100, HighPriority, "HighPriority should be 100")
 }
 
 func TestExternalObservation(t *testing.T) {
