@@ -42,6 +42,29 @@ const (
 )
 
 var (
+
+	// Processing time with priority
+	workDurationWithPriority = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Subsystem: WorkQueueSubsystem,
+			Name:      "work_duration_seconds_with_priority",
+			Help:      "How long in seconds processing an item from workqueue takes, by priority",
+			Buckets:   prometheus.ExponentialBuckets(10e-9, 10, 12),
+		},
+		[]string{"name", "controller", "priority"},
+	)
+
+	// Total time (queue + processing)
+	totalDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Subsystem: WorkQueueSubsystem,
+			Name:      "total_duration_seconds",
+			Help:      "Total time from queue to completion, by priority",
+			Buckets:   prometheus.ExponentialBuckets(10e-9, 10, 12),
+		},
+		[]string{"name", "controller", "priority"},
+	)
+
 	depth = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Subsystem: WorkQueueSubsystem,
 		Name:      DepthKey,
@@ -62,7 +85,7 @@ var (
 		NativeHistogramBucketFactor:     1.1,
 		NativeHistogramMaxBucketNumber:  100,
 		NativeHistogramMinResetDuration: 1 * time.Hour,
-	}, []string{"name", "controller"})
+	}, []string{"name", "controller", "priority"})
 
 	workDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Subsystem:                       WorkQueueSubsystem,
@@ -102,11 +125,18 @@ func init() {
 	metrics.Registry.MustRegister(adds)
 	metrics.Registry.MustRegister(latency)
 	metrics.Registry.MustRegister(workDuration)
+	metrics.Registry.MustRegister(workDurationWithPriority)
+	metrics.Registry.MustRegister(totalDuration)
 	metrics.Registry.MustRegister(unfinished)
 	metrics.Registry.MustRegister(longestRunningProcessor)
 	metrics.Registry.MustRegister(retries)
 
 	workqueue.SetProvider(WorkqueueMetricsProvider{})
+}
+
+// Aggiungi questa interfaccia
+type LatencyMetricWithPriority interface {
+	Observe(priority int, value float64)
 }
 
 type WorkqueueMetricsProvider struct{}
@@ -120,7 +150,7 @@ func (WorkqueueMetricsProvider) NewAddsMetric(name string) workqueue.CounterMetr
 }
 
 func (WorkqueueMetricsProvider) NewLatencyMetric(name string) workqueue.HistogramMetric {
-	return latency.WithLabelValues(name, name)
+	return latency.WithLabelValues(name, name, "")
 }
 
 func (WorkqueueMetricsProvider) NewWorkDurationMetric(name string) workqueue.HistogramMetric {
@@ -141,8 +171,18 @@ func (WorkqueueMetricsProvider) NewRetriesMetric(name string) workqueue.CounterM
 
 type MetricsProviderWithPriority interface {
 	workqueue.MetricsProvider
-
 	NewDepthMetricWithPriority(name string) DepthMetricWithPriority
+	NewLatencyMetricWithPriority(name string) LatencyMetricWithPriority
+	NewWorkDurationMetricWithPriority(name string) WorkDurationMetricWithPriority
+	NewTotalDurationMetricWithPriority(name string) TotalDurationMetricWithPriority
+}
+
+type WorkDurationMetricWithPriority interface {
+	Observe(priority int, value float64)
+}
+
+type TotalDurationMetricWithPriority interface {
+	Observe(priority int, value float64)
 }
 
 // DepthMetricWithPriority represents a depth metric with priority.
@@ -153,12 +193,60 @@ type DepthMetricWithPriority interface {
 
 var _ MetricsProviderWithPriority = WorkqueueMetricsProvider{}
 
+func (WorkqueueMetricsProvider) NewWorkDurationMetricWithPriority(name string) WorkDurationMetricWithPriority {
+	return &workDurationMetricWithPriority{
+		metric: workDurationWithPriority,
+		lvs:    []string{name, name},
+	}
+}
+
+func (WorkqueueMetricsProvider) NewTotalDurationMetricWithPriority(name string) TotalDurationMetricWithPriority {
+	return &totalDurationMetricWithPriority{
+		metric: totalDuration,
+		lvs:    []string{name, name},
+	}
+}
+
+type workDurationMetricWithPriority struct {
+	metric *prometheus.HistogramVec
+	lvs    []string
+}
+
+func (w *workDurationMetricWithPriority) Observe(priority int, value float64) {
+	w.metric.WithLabelValues(append(w.lvs, strconv.Itoa(priority))...).Observe(value)
+}
+
+type totalDurationMetricWithPriority struct {
+	metric *prometheus.HistogramVec
+	lvs    []string
+}
+
+func (t *totalDurationMetricWithPriority) Observe(priority int, value float64) {
+	t.metric.WithLabelValues(append(t.lvs, strconv.Itoa(priority))...).Observe(value)
+}
+
 func (WorkqueueMetricsProvider) NewDepthMetricWithPriority(name string) DepthMetricWithPriority {
 	return &depthWithPriorityMetric{lvs: []string{name, name}}
 }
 
 type depthWithPriorityMetric struct {
 	lvs []string
+}
+
+func (WorkqueueMetricsProvider) NewLatencyMetricWithPriority(name string) LatencyMetricWithPriority {
+	return &latencyMetricWithPriority{
+		metric: latency,
+		lvs:    []string{name, name},
+	}
+}
+
+type latencyMetricWithPriority struct {
+	metric *prometheus.HistogramVec
+	lvs    []string
+}
+
+func (l *latencyMetricWithPriority) Observe(priority int, value float64) {
+	l.metric.WithLabelValues(append(l.lvs, strconv.Itoa(priority))...).Observe(value)
 }
 
 func (g *depthWithPriorityMetric) Inc(priority int) {

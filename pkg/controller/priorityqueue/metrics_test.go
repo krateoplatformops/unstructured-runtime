@@ -17,12 +17,14 @@ func newFakeMetricsProvider() *fakeMetricsProvider {
 		longestRunningProcessor: make(map[string]float64),
 		retries:                 make(map[string]int),
 		mu:                      sync.Mutex{},
+		totalDuration:           make(map[string][]float64),
 	}
 }
 
 var _ metrics.MetricsProviderWithPriority = &fakeMetricsProvider{}
 
 type fakeMetricsProvider struct {
+	totalDuration           map[string][]float64
 	depth                   map[string]map[int]int
 	adds                    map[string]int
 	latency                 map[string][]float64
@@ -37,11 +39,32 @@ func (f *fakeMetricsProvider) NewDepthMetric(name string) workqueue.GaugeMetric 
 	panic("Should never be called. Expected NewDepthMetricWithPriority to be called instead")
 }
 
+func (f *fakeMetricsProvider) NewTotalDurationMetricWithPriority(name string) metrics.TotalDurationMetricWithPriority {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.totalDuration[name] = []float64{}
+	return &fakeTotalDurationMetricWithPriority{m: &f.totalDuration, mu: &f.mu, name: name}
+}
+
+func (f *fakeMetricsProvider) NewWorkDurationMetricWithPriority(name string) metrics.WorkDurationMetricWithPriority {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.workDuration[name] = []float64{}
+	return &fakeWorkDurationMetricWithPriority{m: &f.workDuration, mu: &f.mu, name: name}
+}
+
 func (f *fakeMetricsProvider) NewDepthMetricWithPriority(name string) metrics.DepthMetricWithPriority {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.depth[name] = map[int]int{}
 	return &fakeGaugeMetric{m: &f.depth, mu: &f.mu, name: name}
+}
+
+func (f *fakeMetricsProvider) NewLatencyMetricWithPriority(name string) metrics.LatencyMetricWithPriority {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.latency[name] = []float64{}
+	return &fakeLatencyMetricWithPriority{m: &f.latency, mu: &f.mu, name: name}
 }
 
 func (f *fakeMetricsProvider) NewAddsMetric(name string) workqueue.CounterMetric {
@@ -128,6 +151,30 @@ func (fh *fakeHistogramMetric) Observe(v float64) {
 	(*fh.m)[fh.name] = append((*fh.m)[fh.name], v)
 }
 
+type fakeWorkDurationMetricWithPriority struct {
+	m    *map[string][]float64
+	mu   *sync.Mutex
+	name string
+}
+
+func (fw *fakeWorkDurationMetricWithPriority) Observe(priority int, v float64) {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	(*fw.m)[fw.name] = append((*fw.m)[fw.name], v)
+}
+
+type fakeLatencyMetricWithPriority struct {
+	m    *map[string][]float64
+	mu   *sync.Mutex
+	name string
+}
+
+func (fl *fakeLatencyMetricWithPriority) Observe(priority int, v float64) {
+	fl.mu.Lock()
+	defer fl.mu.Unlock()
+	(*fl.m)[fl.name] = append((*fl.m)[fl.name], v)
+}
+
 type fakeSettableGaugeMetric struct {
 	m    *map[string]float64
 	mu   *sync.Mutex
@@ -138,4 +185,16 @@ func (fs *fakeSettableGaugeMetric) Set(v float64) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	(*fs.m)[fs.name] = v
+}
+
+type fakeTotalDurationMetricWithPriority struct {
+	m    *map[string][]float64
+	mu   *sync.Mutex
+	name string
+}
+
+func (ft *fakeTotalDurationMetricWithPriority) Observe(priority int, v float64) {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	(*ft.m)[ft.name] = append((*ft.m)[ft.name], v)
 }

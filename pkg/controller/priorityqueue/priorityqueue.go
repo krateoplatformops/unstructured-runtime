@@ -72,6 +72,7 @@ func New[T comparable](name string, o ...Opt[T]) PriorityQueue[T] {
 		itemOrWaiterAdded: make(chan struct{}, 1),
 		rateLimiter:       opts.RateLimiter,
 		locked:            sets.Set[T]{},
+		lockedPriority:    make(map[T]int),
 		done:              make(chan struct{}),
 		get:               make(chan item[T]),
 		now:               time.Now,
@@ -113,6 +114,8 @@ type priorityqueue[T comparable] struct {
 	// yet been returned through Done().
 	locked     sets.Set[T]
 	lockedLock sync.RWMutex
+
+	lockedPriority map[T]int
 
 	shutdown atomic.Bool
 	done     chan struct{}
@@ -249,6 +252,7 @@ func (w *priorityqueue[T]) spin() {
 
 				w.metrics.get(item.Key, item.Priority)
 				w.locked.Insert(item.Key)
+				w.lockedPriority[item.Key] = item.Priority
 				w.waiters.Add(-1)
 				delete(w.items, item.Key)
 				toDelete = append(toDelete, item)
@@ -312,8 +316,11 @@ func (w *priorityqueue[T]) ShuttingDown() bool {
 func (w *priorityqueue[T]) Done(item T) {
 	w.lockedLock.Lock()
 	defer w.lockedLock.Unlock()
+
+	priority := w.lockedPriority[item]
 	w.locked.Delete(item)
-	w.metrics.done(item)
+	delete(w.lockedPriority, item)
+	w.metrics.done(item, priority)
 	w.notifyItemOrWaiterAdded()
 }
 

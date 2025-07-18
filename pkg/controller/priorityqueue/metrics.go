@@ -9,16 +9,11 @@ import (
 	"k8s.io/utils/clock"
 )
 
-// This file is mostly a copy of unexported code from
-// https://github.com/kubernetes/kubernetes/blob/1d8828ce707ed9dd7a6a9756385419cce1d202ac/staging/src/k8s.io/client-go/util/workqueue/metrics.go
-//
-// The only two differences are the addition of mapLock in defaultQueueMetrics and converging retryMetrics into queueMetrics.
-
 type queueMetrics[T comparable] interface {
 	add(item T, priority int)
 	get(item T, priority int)
 	updateDepthWithPriorityMetric(oldPriority, newPriority int)
-	done(item T)
+	done(item T, priority int)
 	updateUnfinishedWork()
 	retry()
 }
@@ -42,6 +37,9 @@ func newQueueMetrics[T comparable](mp workqueue.MetricsProvider, name string, cl
 
 	if mpp, ok := mp.(metrics.MetricsProviderWithPriority); ok {
 		dqm.depthWithPriority = mpp.NewDepthMetricWithPriority(name)
+		dqm.latencyWithPriority = mpp.NewLatencyMetricWithPriority(name)
+		dqm.workDurationWithPriority = mpp.NewWorkDurationMetricWithPriority(name)
+		dqm.totalDurationWithPriority = mpp.NewTotalDurationMetricWithPriority(name)
 	} else {
 		dqm.depth = mp.NewDepthMetric(name)
 	}
@@ -58,9 +56,12 @@ type defaultQueueMetrics[T comparable] struct {
 	// total number of adds handled by a workqueue
 	adds workqueue.CounterMetric
 	// how long an item stays in a workqueue
-	latency workqueue.HistogramMetric
+	latency             workqueue.HistogramMetric
+	latencyWithPriority metrics.LatencyMetricWithPriority
 	// how long processing an item from a workqueue takes
-	workDuration workqueue.HistogramMetric
+	workDuration              workqueue.HistogramMetric
+	workDurationWithPriority  metrics.WorkDurationMetricWithPriority
+	totalDurationWithPriority metrics.TotalDurationMetricWithPriority
 
 	mapLock              sync.RWMutex
 	addTimes             map[T]time.Time
@@ -110,7 +111,11 @@ func (m *defaultQueueMetrics[T]) get(item T, priority int) {
 
 	m.processingStartTimes[item] = m.clock.Now()
 	if startTime, exists := m.addTimes[item]; exists {
-		m.latency.Observe(m.sinceInSeconds(startTime))
+		if m.latencyWithPriority != nil {
+			m.latencyWithPriority.Observe(priority, m.sinceInSeconds(startTime))
+		} else {
+			m.latency.Observe(m.sinceInSeconds(startTime))
+		}
 		delete(m.addTimes, item)
 	}
 }
@@ -122,16 +127,30 @@ func (m *defaultQueueMetrics[T]) updateDepthWithPriorityMetric(oldPriority, newP
 	}
 }
 
-func (m *defaultQueueMetrics[T]) done(item T) {
+func (m *defaultQueueMetrics[T]) done(item T, priority int) {
 	if m == nil {
 		return
 	}
 
 	m.mapLock.Lock()
 	defer m.mapLock.Unlock()
+
 	if startTime, exists := m.processingStartTimes[item]; exists {
-		m.workDuration.Observe(m.sinceInSeconds(startTime))
+		processingDuration := m.sinceInSeconds(startTime)
+		m.workDuration.Observe(processingDuration)
+
+		if m.workDurationWithPriority != nil {
+			m.workDurationWithPriority.Observe(priority, processingDuration)
+		}
+
 		delete(m.processingStartTimes, item)
+	}
+
+	if addTime, exists := m.addTimes[item]; exists {
+		totalDuration := m.sinceInSeconds(addTime)
+		if m.totalDurationWithPriority != nil {
+			m.totalDurationWithPriority.Observe(priority, totalDuration)
+		}
 	}
 }
 
@@ -167,6 +186,6 @@ type noMetrics[T any] struct{}
 func (noMetrics[T]) add(item T, priority int)                                   {}
 func (noMetrics[T]) get(item T, priority int)                                   {}
 func (noMetrics[T]) updateDepthWithPriorityMetric(oldPriority, newPriority int) {}
-func (noMetrics[T]) done(item T)                                                {}
+func (noMetrics[T]) done(item T, priority int)                                  {}
 func (noMetrics[T]) updateUnfinishedWork()                                      {}
 func (noMetrics[T]) retry()                                                     {}
