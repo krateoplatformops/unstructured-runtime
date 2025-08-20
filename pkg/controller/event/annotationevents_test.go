@@ -180,7 +180,7 @@ func TestAnnotationEvents_Add(t *testing.T) {
 			initialEvents: NewAnnotationEvents(
 				AnnotationEvent{EventType: Observe, Annotation: "annotation1"},
 			),
-			eventType:     Create,
+			eventType:     Observe,
 			annotation:    "annotation1",
 			overwrite:     false,
 			expectedLen:   1,
