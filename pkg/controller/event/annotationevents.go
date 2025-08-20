@@ -1,8 +1,18 @@
 package event
 
+type Action string
+
+const (
+	OnChange Action = "OnChange"
+	OnDelete Action = "OnDelete"
+	OnCreate Action = "OnCreate"
+	OnAny    Action = "OnAny"
+)
+
 type AnnotationEvent struct {
 	EventType  EventType `json:"eventType"`
 	Annotation string    `json:"annotation"`
+	OnAction   Action    `json:"onAction"`
 }
 
 // This is a list of annotation events.
@@ -35,7 +45,7 @@ func (ae *AnnotationEvents) Remove(annotation string) {
 }
 
 // Add adds an event with optional overwrite capability
-func (ae *AnnotationEvents) Add(eventType EventType, annotation string, overwrite bool) {
+func (ae *AnnotationEvents) Add(eventType EventType, annotation string, action Action, overwrite bool) {
 	if overwrite {
 		// Remove existing event with same annotation
 		ae.Remove(annotation)
@@ -47,5 +57,6 @@ func (ae *AnnotationEvents) Add(eventType EventType, annotation string, overwrit
 	*ae = append(*ae, AnnotationEvent{
 		EventType:  eventType,
 		Annotation: annotation,
+		OnAction:   action,
 	})
 }

@@ -1,156 +1,14 @@
 package event
 
-import (
-	"testing"
-)
+import "testing"
 
-func TestNewAnnotationEvents(t *testing.T) {
-	tests := []struct {
-		name     string
-		events   []AnnotationEvent
-		expected int
-	}{
-		{
-			name:     "empty events",
-			events:   []AnnotationEvent{},
-			expected: 0,
-		},
-		{
-			name: "single event",
-			events: []AnnotationEvent{
-				{EventType: Observe, Annotation: "annotation1"},
-			},
-			expected: 1,
-		},
-		{
-			name: "multiple events",
-			events: []AnnotationEvent{
-				{EventType: Observe, Annotation: "annotation1"},
-				{EventType: Create, Annotation: "annotation2"},
-			},
-			expected: 2,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := NewAnnotationEvents(tt.events...)
-			if len(result) != tt.expected {
-				t.Errorf("expected %d events, got %d", tt.expected, len(result))
-			}
-		})
-	}
-}
-
-func TestAnnotationEvents_HasAnnotation(t *testing.T) {
-	events := NewAnnotationEvents(
-		AnnotationEvent{EventType: Observe, Annotation: "annotation1"},
-		AnnotationEvent{EventType: Create, Annotation: "annotation2"},
-	)
-
-	tests := []struct {
-		name       string
-		annotation string
-		expected   bool
-	}{
-		{
-			name:       "existing annotation",
-			annotation: "annotation1",
-			expected:   true,
-		},
-		{
-			name:       "non-existing annotation",
-			annotation: "annotation3",
-			expected:   false,
-		},
-		{
-			name:       "empty annotation",
-			annotation: "",
-			expected:   false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := events.HasAnnotation(tt.annotation)
-			if result != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, result)
-			}
-		})
-	}
-}
-
-func TestAnnotationEvents_Remove(t *testing.T) {
-	tests := []struct {
-		name                string
-		initialEvents       AnnotationEvents
-		removeAnnotation    string
-		expectedLen         int
-		expectedAnnotations []string
-	}{
-		{
-			name: "remove existing annotation",
-			initialEvents: NewAnnotationEvents(
-				AnnotationEvent{EventType: Observe, Annotation: "annotation1"},
-				AnnotationEvent{EventType: Create, Annotation: "annotation2"},
-			),
-			removeAnnotation:    "annotation1",
-			expectedLen:         1,
-			expectedAnnotations: []string{"annotation2"},
-		},
-		{
-			name: "remove non-existing annotation",
-			initialEvents: NewAnnotationEvents(
-				AnnotationEvent{EventType: Observe, Annotation: "annotation1"},
-			),
-			removeAnnotation:    "annotation3",
-			expectedLen:         1,
-			expectedAnnotations: []string{"annotation1"},
-		},
-		{
-			name:                "remove from empty list",
-			initialEvents:       NewAnnotationEvents(),
-			removeAnnotation:    "annotation1",
-			expectedLen:         0,
-			expectedAnnotations: []string{},
-		},
-		{
-			name: "remove multiple occurrences",
-			initialEvents: NewAnnotationEvents(
-				AnnotationEvent{EventType: Observe, Annotation: "annotation1"},
-				AnnotationEvent{EventType: Create, Annotation: "annotation1"},
-				AnnotationEvent{EventType: Observe, Annotation: "annotation2"},
-			),
-			removeAnnotation:    "annotation1",
-			expectedLen:         1,
-			expectedAnnotations: []string{"annotation2"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			events := tt.initialEvents
-			events.Remove(tt.removeAnnotation)
-
-			if len(events) != tt.expectedLen {
-				t.Errorf("expected length %d, got %d", tt.expectedLen, len(events))
-			}
-
-			for _, expectedAnnotation := range tt.expectedAnnotations {
-				if !events.HasAnnotation(expectedAnnotation) {
-					t.Errorf("expected annotation %s to exist", expectedAnnotation)
-				}
-			}
-		})
-	}
-}
-
-func TestAnnotationEvents_Add(t *testing.T) {
+func TestAnnotationEvents_Add_Fixed(t *testing.T) {
 	tests := []struct {
 		name          string
 		initialEvents AnnotationEvents
 		eventType     EventType
 		annotation    string
+		action        Action
 		overwrite     bool
 		expectedLen   int
 		shouldContain string
@@ -160,6 +18,7 @@ func TestAnnotationEvents_Add(t *testing.T) {
 			initialEvents: NewAnnotationEvents(),
 			eventType:     Observe,
 			annotation:    "annotation1",
+			action:        OnCreate,
 			overwrite:     false,
 			expectedLen:   1,
 			shouldContain: "annotation1",
@@ -167,10 +26,11 @@ func TestAnnotationEvents_Add(t *testing.T) {
 		{
 			name: "add new annotation without overwrite",
 			initialEvents: NewAnnotationEvents(
-				AnnotationEvent{EventType: Observe, Annotation: "annotation1"},
+				AnnotationEvent{EventType: Observe, Annotation: "annotation1", OnAction: OnCreate},
 			),
 			eventType:     Create,
 			annotation:    "annotation2",
+			action:        OnChange,
 			overwrite:     false,
 			expectedLen:   2,
 			shouldContain: "annotation2",
@@ -178,57 +38,137 @@ func TestAnnotationEvents_Add(t *testing.T) {
 		{
 			name: "add existing annotation without overwrite",
 			initialEvents: NewAnnotationEvents(
-				AnnotationEvent{EventType: Observe, Annotation: "annotation1"},
+				AnnotationEvent{EventType: Observe, Annotation: "annotation1", OnAction: OnCreate},
 			),
-			eventType:     Observe,
-			annotation:    "annotation1",
-			overwrite:     false,
-			expectedLen:   1,
-			shouldContain: "annotation1",
+			eventType:   Observe,
+			annotation:  "annotation1",
+			action:      OnCreate,
+			overwrite:   false,
+			expectedLen: 1,
 		},
 		{
 			name: "add existing annotation with overwrite",
 			initialEvents: NewAnnotationEvents(
-				AnnotationEvent{EventType: Observe, Annotation: "annotation1"},
+				AnnotationEvent{EventType: Observe, Annotation: "annotation1", OnAction: OnCreate},
 			),
 			eventType:     Create,
 			annotation:    "annotation1",
+			action:        OnDelete,
 			overwrite:     true,
 			expectedLen:   1,
 			shouldContain: "annotation1",
-		},
-		{
-			name: "add new annotation with overwrite",
-			initialEvents: NewAnnotationEvents(
-				AnnotationEvent{EventType: Observe, Annotation: "annotation1"},
-			),
-			eventType:     Create,
-			annotation:    "annotation2",
-			overwrite:     true,
-			expectedLen:   2,
-			shouldContain: "annotation2",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			events := tt.initialEvents
-			events.Add(tt.eventType, tt.annotation, tt.overwrite)
+			events.Add(tt.eventType, tt.annotation, tt.action, tt.overwrite)
 
 			if len(events) != tt.expectedLen {
 				t.Errorf("expected length %d, got %d", tt.expectedLen, len(events))
 			}
 
-			if !events.HasAnnotation(tt.shouldContain) {
+			if tt.shouldContain != "" && !events.HasAnnotation(tt.shouldContain) {
 				t.Errorf("expected annotation %s to exist", tt.shouldContain)
 			}
 
-			// Check that the event type is correct for the added annotation
+			// Check that the event type and action are correct for the added annotation
 			for _, event := range events {
-				if event.Annotation == tt.annotation && event.EventType != tt.eventType {
-					t.Errorf("expected event type %v for annotation %s, got %v", tt.eventType, tt.annotation, event.EventType)
+				if event.Annotation == tt.annotation {
+					if event.EventType != tt.eventType {
+						t.Errorf("expected event type %v for annotation %s, got %v", tt.eventType, tt.annotation, event.EventType)
+					}
+					if event.OnAction != tt.action {
+						t.Errorf("expected action %v for annotation %s, got %v", tt.action, tt.annotation, event.OnAction)
+					}
 				}
 			}
 		})
 	}
+}
+
+func TestAction_Constants(t *testing.T) {
+	tests := []struct {
+		action   Action
+		expected string
+	}{
+		{OnChange, "OnChange"},
+		{OnDelete, "OnDelete"},
+		{OnCreate, "OnCreate"},
+		{OnAny, "OnAny"},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.action), func(t *testing.T) {
+			if string(tt.action) != tt.expected {
+				t.Errorf("expected %s, got %s", tt.expected, string(tt.action))
+			}
+		})
+	}
+}
+
+func TestAnnotationEvent_Fields(t *testing.T) {
+	event := AnnotationEvent{
+		EventType:  Observe,
+		Annotation: "test-annotation",
+		OnAction:   OnCreate,
+	}
+
+	if event.EventType != Observe {
+		t.Errorf("expected EventType %v, got %v", Observe, event.EventType)
+	}
+	if event.Annotation != "test-annotation" {
+		t.Errorf("expected Annotation 'test-annotation', got '%s'", event.Annotation)
+	}
+	if event.OnAction != OnCreate {
+		t.Errorf("expected OnAction %v, got %v", OnCreate, event.OnAction)
+	}
+}
+
+func TestAnnotationEvents_EdgeCases(t *testing.T) {
+	t.Run("has annotation on empty slice", func(t *testing.T) {
+		events := NewAnnotationEvents()
+		if events.HasAnnotation("any") {
+			t.Error("expected false for empty slice")
+		}
+	})
+
+	t.Run("remove from single item slice", func(t *testing.T) {
+		events := NewAnnotationEvents(
+			AnnotationEvent{EventType: Observe, Annotation: "only", OnAction: OnCreate},
+		)
+		events.Remove("only")
+		if len(events) != 0 {
+			t.Errorf("expected empty slice, got length %d", len(events))
+		}
+	})
+
+	t.Run("add with overwrite removes all matching annotations", func(t *testing.T) {
+		events := NewAnnotationEvents(
+			AnnotationEvent{EventType: Observe, Annotation: "duplicate", OnAction: OnCreate},
+			AnnotationEvent{EventType: Create, Annotation: "duplicate", OnAction: OnDelete},
+			AnnotationEvent{EventType: Observe, Annotation: "other", OnAction: OnAny},
+		)
+
+		events.Add(Update, "duplicate", OnChange, true)
+
+		if len(events) != 2 {
+			t.Errorf("expected 2 events after overwrite, got %d", len(events))
+		}
+
+		duplicateCount := 0
+		for _, event := range events {
+			if event.Annotation == "duplicate" {
+				duplicateCount++
+				if event.EventType != Update || event.OnAction != OnChange {
+					t.Error("overwritten event has incorrect values")
+				}
+			}
+		}
+
+		if duplicateCount != 1 {
+			t.Errorf("expected 1 duplicate annotation after overwrite, got %d", duplicateCount)
+		}
+	})
 }

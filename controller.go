@@ -62,11 +62,11 @@ func New(ctx context.Context, opts Options) *controller.Controller {
 	}
 
 	watchAnnotations := ctrlevent.NewAnnotationEvents()
-	watchAnnotations.Add(ctrlevent.Observe, meta.AnnotationKeyReconciliationPaused, false)
-	watchAnnotations.Add(ctrlevent.Create, meta.AnnotationKeyExternalCreatePending, false)
+	watchAnnotations.Add(ctrlevent.Observe, meta.AnnotationKeyReconciliationPaused, ctrlevent.OnAny, false)
+	watchAnnotations.Add(ctrlevent.Create, meta.AnnotationKeyExternalCreatePending, ctrlevent.OnDelete, false)
 	if len(opts.WatchAnnotations) > 0 {
 		for _, event := range opts.WatchAnnotations {
-			watchAnnotations.Add(event.EventType, event.Annotation, true)
+			watchAnnotations.Add(event.EventType, event.Annotation, ctrlevent.OnAny, true)
 		}
 	}
 

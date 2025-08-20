@@ -260,7 +260,20 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						oldValue, oldExists := oldUns.GetAnnotations()[event.Annotation]
 						newValue, newExists := newUns.GetAnnotations()[event.Annotation]
 
-						if (oldExists && !newExists) || (oldExists && newExists && oldValue != newValue) || (!oldExists && newExists) {
+						deletedCondition := !newExists && oldExists
+						createdCondition := newExists && !oldExists
+						changedCondition := oldExists && newExists && !cmp.Equal(oldValue, newValue)
+						anyConditions := deletedCondition || createdCondition || changedCondition
+
+						trigger := false
+						action := event.OnAction
+						if action == ctrlevent.OnDelete && deletedCondition ||
+							action == ctrlevent.OnCreate && createdCondition ||
+							action == ctrlevent.OnChange && changedCondition ||
+							action == ctrlevent.OnAny && anyConditions {
+							trigger = true
+						}
+						if trigger {
 							item := ctrlevent.Event{
 								EventType: event.EventType,
 								ObjectRef: objectref.ObjectRef{
