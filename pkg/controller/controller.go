@@ -81,6 +81,7 @@ type Options struct {
 	Pluralizer        pluralizer.PluralizerInterface
 	GlobalRateLimiter workqueue.TypedRateLimiter[any]
 	MetricsServer     metricsserver.Server
+	WatchAnnotations  ctrlevent.AnnotationEvents
 }
 
 type Controller struct {
@@ -253,36 +254,52 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					return
 				}
 
-				//Checking Krateo Annotations - "krateo.io/paused"
-				if meta.IsPaused(newUns) && !meta.IsPaused(oldUns) {
-					log.Debug(fmt.Sprintf("Object %s/%s is paused", newUns.GetNamespace(), newUns.GetName()))
+				if len(opts.WatchAnnotations) > 0 {
+					// Check if any of the annotations we are watching have changed
+					for _, event := range opts.WatchAnnotations {
+						oldValue, oldExists := oldUns.GetAnnotations()[event.Annotation]
+						newValue, newExists := newUns.GetAnnotations()[event.Annotation]
 
-					item := ctrlevent.Event{
-						EventType: ctrlevent.Observe,
-						ObjectRef: objectref.ObjectRef{
-							APIVersion: newUns.GetAPIVersion(),
-							Kind:       newUns.GetKind(),
-							Name:       newUns.GetName(),
-							Namespace:  newUns.GetNamespace(),
-						},
-						QueuedAt: time.Now(),
-					}
+						deletedCondition := !newExists && oldExists
+						createdCondition := newExists && !oldExists
+						changedCondition := oldExists && newExists && !cmp.Equal(oldValue, newValue)
+						anyConditions := deletedCondition || createdCondition || changedCondition
 
-					dig := ctrlevent.DigestForEvent(item)
-					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-						log.WithValues(
-							"kind", item.ObjectRef.Kind,
-							"apiVersion", item.ObjectRef.APIVersion,
-							"name", item.ObjectRef.Name,
-							"namespace", item.ObjectRef.Namespace,
-							"queuedAt", item.QueuedAt,
-						).Debug("Adding Observe event to queue", "priority", LowPriority)
-						queue.AddWithOpts(priorityqueue.AddOpts{
-							RateLimited: true,
-							Priority:    NormalPriority,
-						}, item)
+						trigger := false
+						action := event.OnAction
+						if action == ctrlevent.OnDelete && deletedCondition ||
+							action == ctrlevent.OnCreate && createdCondition ||
+							action == ctrlevent.OnChange && changedCondition ||
+							action == ctrlevent.OnAny && anyConditions {
+							trigger = true
+						}
+						if trigger {
+							item := ctrlevent.Event{
+								EventType: event.EventType,
+								ObjectRef: objectref.ObjectRef{
+									APIVersion: newUns.GetAPIVersion(),
+									Kind:       newUns.GetKind(),
+									Name:       newUns.GetName(),
+									Namespace:  newUns.GetNamespace(),
+								},
+								QueuedAt: time.Now(),
+							}
+
+							log.WithValues(
+								"kind", item.ObjectRef.Kind,
+								"apiVersion", item.ObjectRef.APIVersion,
+								"name", item.ObjectRef.Name,
+								"namespace", item.ObjectRef.Namespace,
+								"queuedAt", item.QueuedAt,
+							).Debug("Adding event to queue for annotation change", "priority", NormalPriority, "eventType", event.EventType, "annotation", event.Annotation)
+							queue.AddWithOpts(priorityqueue.AddOpts{
+								RateLimited: false,
+								Priority:    NormalPriority,
+							}, item)
+
+							return
+						}
 					}
-					return
 				}
 
 				newSpec, _, err := unstructured.NestedMap(newUns.Object, "spec")
@@ -377,21 +394,18 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					},
 					QueuedAt: time.Now(),
 				}
-				dig := ctrlevent.DigestForEvent(item)
 
-				if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-					log.WithValues(
-						"kind", item.ObjectRef.Kind,
-						"apiVersion", item.ObjectRef.APIVersion,
-						"name", item.ObjectRef.Name,
-						"namespace", item.ObjectRef.Namespace,
-						"queuedAt", item.QueuedAt,
-					).Debug("Adding Delete event to queue")
-					queue.AddWithOpts(priorityqueue.AddOpts{
-						RateLimited: false,
-						Priority:    HighPriority,
-					}, item)
-				}
+				log.WithValues(
+					"kind", item.ObjectRef.Kind,
+					"apiVersion", item.ObjectRef.APIVersion,
+					"name", item.ObjectRef.Name,
+					"namespace", item.ObjectRef.Namespace,
+					"queuedAt", item.QueuedAt,
+				).Debug("Adding Delete event to queue")
+				queue.AddWithOpts(priorityqueue.AddOpts{
+					RateLimited: false,
+					Priority:    HighPriority,
+				}, item)
 			},
 		},
 	})

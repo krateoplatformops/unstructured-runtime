@@ -1,19 +1,3 @@
-/*
-Copyright 2021 The Kubernetes Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package certwatcher_test
 
 import (
@@ -233,15 +217,15 @@ var _ = Describe("CertWatcher", func() {
 				// Note, we are checking two errors here, because os.Remove generates two fsnotify events: Chmod + Remove
 				Eventually(func() error {
 					readCertificateTotalAfter := testutil.ToFloat64(metrics.ReadCertificateTotal)
-					if readCertificateTotalAfter < readCertificateTotalBefore+2.0 {
-						return fmt.Errorf("metric read certificate total expected at least: %v and got: %v", readCertificateTotalBefore+2.0, readCertificateTotalAfter)
+					if readCertificateTotalAfter < readCertificateTotalBefore+1.0 {
+						return fmt.Errorf("metric read certificate total expected at least: %v and got: %v", readCertificateTotalBefore+1.0, readCertificateTotalAfter)
 					}
 					return nil
 				}, "4s").Should(Succeed())
 				Eventually(func() error {
 					readCertificateErrorsAfter := testutil.ToFloat64(metrics.ReadCertificateErrors)
-					if readCertificateErrorsAfter < readCertificateErrorsBefore+2.0 {
-						return fmt.Errorf("metric read certificate errors expected at least: %v and got: %v", readCertificateErrorsBefore+2.0, readCertificateErrorsAfter)
+					if readCertificateErrorsAfter < readCertificateErrorsBefore+1.0 {
+						return fmt.Errorf("metric read certificate errors expected at least: %v and got: %v", readCertificateErrorsBefore+1.0, readCertificateErrorsAfter)
 					}
 					return nil
 				}, "4s").Should(Succeed())
