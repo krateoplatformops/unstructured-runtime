@@ -41,17 +41,3 @@ func UpdateStatus(ctx context.Context, el *unstructured.Unstructured, opts Updat
 
 	return res, err
 }
-
-func UpdateAny(ctx context.Context, el *unstructured.Unstructured, opts UpdateOptions) (*unstructured.Unstructured, error) {
-	uns, err := UpdateStatus(ctx, el, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	res, err := Update(ctx, uns, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	return res, nil
-}
