@@ -8,7 +8,9 @@ import (
 	"github.com/krateoplatformops/plumbing/kubeutil/event"
 	"github.com/krateoplatformops/plumbing/kubeutil/eventrecorder"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
+	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	metricsserver "github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/shortid"
@@ -33,6 +35,13 @@ type Options struct {
 	ListWatcher       controller.ListWatcherConfiguration `json:"listWatcher"`
 	GlobalRateLimiter workqueue.TypedRateLimiter[any]     `json:"globalRateLimiter"`
 	Metrics           metricsserver.Options               `json:"metrics"`
+
+	// WachAnnotations is a map of annotations to watch for changes.
+	// The key is the annotation name, and the value is the event to trigger.
+	// If an annotation is not present, no event will be triggered.
+	// If an annotation is present, the corresponding event will be triggered.
+	// This is useful for triggering events based on annotations in the resource.
+	WatchAnnotations ctrlevent.AnnotationEvents `json:"watchAnnotations"`
 }
 
 func New(ctx context.Context, opts Options) *controller.Controller {
@@ -52,6 +61,15 @@ func New(ctx context.Context, opts Options) *controller.Controller {
 		return nil
 	}
 
+	watchAnnotations := ctrlevent.NewAnnotationEvents()
+	watchAnnotations.Add(ctrlevent.Observe, meta.AnnotationKeyReconciliationPaused, false)
+	watchAnnotations.Add(ctrlevent.Create, meta.AnnotationKeyExternalCreatePending, false)
+	if len(opts.WatchAnnotations) > 0 {
+		for _, event := range opts.WatchAnnotations {
+			watchAnnotations.Add(event.EventType, event.Annotation, true)
+		}
+	}
+
 	ctrl := controller.New(sid, controller.Options{
 		Pluralizer:        opts.Pluralizer,
 		Client:            opts.Client,
@@ -64,6 +82,7 @@ func New(ctx context.Context, opts Options) *controller.Controller {
 		ListWatcher:       opts.ListWatcher,
 		GlobalRateLimiter: opts.GlobalRateLimiter,
 		MetricsServer:     metricsServer,
+		WatchAnnotations:  watchAnnotations,
 	})
 
 	return ctrl
