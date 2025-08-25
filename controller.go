@@ -44,6 +44,19 @@ type Options struct {
 	WatchAnnotations ctrlevent.AnnotationEvents `json:"watchAnnotations"`
 }
 
+func GetConfig() (*rest.Config, error) {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, err
+	}
+	if cfg.QPS == 0.0 {
+		// Disable client-side ratelimer by default, we can rely on
+		// API priority and fairness
+		cfg.QPS = -1
+	}
+	return cfg, nil
+}
+
 func New(ctx context.Context, opts Options) *controller.Controller {
 	sid, err := shortid.New(1, shortid.DefaultABC, 2342)
 	if err != nil {

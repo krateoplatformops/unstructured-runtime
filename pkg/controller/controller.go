@@ -151,7 +151,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 		Namespace:     opts.Namespace,
 	})
 	if err != nil {
-		opts.Logger.Debug("Failed to create listwatcher.")
+		opts.Logger.Error(err, "Failed to create listwatcher.")
 		return nil
 	}
 
@@ -165,7 +165,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				log := opts.Logger
 				el, ok := obj.(*unstructured.Unstructured)
 				if !ok {
-					log.Debug("Object is not an unstructured.")
+					log.Warn("Object is not an unstructured.")
 					return
 				}
 
@@ -182,10 +182,10 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				dig := ctrlevent.DigestForEvent(item)
 
 				// Checking if the object is already being processed
-				priority := HighPriority
+				priority := NormalPriority
 				annotations := el.GetAnnotations()
 				if annotations == nil {
-					priority = HighPriority
+					priority = NormalPriority
 				}
 				_, ok = annotations[meta.AnnotationKeyExternalCreateFailed]
 				_, ok_pending := annotations[meta.AnnotationKeyExternalCreatePending]
@@ -212,13 +212,13 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				log := opts.Logger
 				oldUns, ok := old.(*unstructured.Unstructured)
 				if !ok {
-					log.Debug("Object is not an unstructured.")
+					log.Warn("Object is not an unstructured.")
 					return
 				}
 
 				newUns, ok := new.(*unstructured.Unstructured)
 				if !ok {
-					log.Debug("Object is not an unstructured.")
+					log.Warn("Object is not an unstructured.")
 					return
 				}
 
@@ -304,13 +304,14 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 
 				newSpec, _, err := unstructured.NestedMap(newUns.Object, "spec")
 				if err != nil {
-					log.Debug(fmt.Errorf("getting new object spec: %w", err).Error())
+					log.Error(err, "getting new object spec")
 					return
 				}
 
 				oldSpec, _, err := unstructured.NestedMap(oldUns.Object, "spec")
 				if err != nil {
-					log.Debug(fmt.Errorf("getting old object spec: %w", err).Error())
+					log.Error(err, "getting old object spec")
+					return
 				}
 
 				diff := cmp.Diff(newSpec, oldSpec)
@@ -378,7 +379,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				log := opts.Logger
 				el, ok := obj.(*unstructured.Unstructured)
 				if !ok {
-					log.Debug("Object is not an unstructured")
+					log.Warn("Object is not an unstructured.")
 					return
 				}
 

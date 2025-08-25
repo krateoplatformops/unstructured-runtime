@@ -1,6 +1,8 @@
 package logging
 
 import (
+	"log/slog"
+
 	"github.com/go-logr/logr"
 )
 
@@ -20,9 +22,13 @@ type Logger interface {
 
 	// Error logs an error with a message and optional structured data.
 	// Structured data must be supplied as an array that alternates between
-	// string keys and values of an arbitrary type. Use Error for messages that
-	// operators or developers should be concerned with when debugging.
+	// string keys and values of an arbitrary type. Use Error for messages
 	Error(err error, msg string, keysAndValues ...any)
+
+	// Warn logs a message with optional structured data. Structured data must
+	// be supplied as an array that alternates between string keys and values of
+	// an arbitrary type. Use Warn for messages that operators should be aware of.
+	Warn(msg string, keysAndValues ...any)
 
 	// WithValues returns a Logger that will include the supplied structured
 	// data with any subsequent messages it logs. Structured data must
@@ -44,9 +50,10 @@ type nopLogger struct{}
 
 func (l nopLogger) Info(msg string, keysAndValues ...any)             {}
 func (l nopLogger) Debug(msg string, keysAndValues ...any)            {}
-func (l nopLogger) WithValues(keysAndValues ...any) Logger            { return nopLogger{} }
-func (l nopLogger) WithName(name string) Logger                       { return nopLogger{} }
 func (l nopLogger) Error(err error, msg string, keysAndValues ...any) {}
+func (l nopLogger) Warn(msg string, keysAndValues ...any)             {}
+func (l nopLogger) WithName(name string) Logger                       { return nopLogger{} }
+func (l nopLogger) WithValues(keysAndValues ...any) Logger            { return nopLogger{} }
 
 // NewLogrLogger returns a Logger that is satisfied by the supplied logr.Logger,
 // which may be satisfied in turn by various logging implementations (Zap, klog,
@@ -71,10 +78,41 @@ func (l logrLogger) Error(err error, msg string, keysAndValues ...any) {
 	l.log.Error(err, msg, keysAndValues...) //nolint:logrlint // False positive - logrlint thinks there's an odd number of args.
 }
 
+func (l logrLogger) Warn(msg string, keysAndValues ...any) {
+	l.log.V(0).Info(msg, keysAndValues...) //nolint:logrlint // False positive - logrlint thinks there's an odd number of args.
+}
+
 func (l logrLogger) WithName(name string) Logger {
 	return logrLogger{log: l.log.WithName(name)}
 }
 
 func (l logrLogger) WithValues(keysAndValues ...any) Logger {
 	return logrLogger{log: l.log.WithValues(keysAndValues...)} //nolint:logrlint // False positive - logrlint thinks there's an odd number of args.
+}
+
+type slogLogger struct {
+	log *slog.Logger
+}
+
+func NewSlogLogger(l slog.Logger) Logger {
+	return slogLogger{log: &l}
+}
+
+func (l slogLogger) Info(msg string, keysAndValues ...any) {
+	l.log.Info(msg, keysAndValues...)
+}
+func (l slogLogger) Debug(msg string, keysAndValues ...any) {
+	l.log.Debug(msg, keysAndValues...)
+}
+func (l slogLogger) Warn(msg string, keysAndValues ...any) {
+	l.log.Warn(msg, keysAndValues...)
+}
+func (l slogLogger) Error(err error, msg string, keysAndValues ...any) {
+	l.log.Error(msg, append(keysAndValues, slog.Any("err", err))...)
+}
+func (l slogLogger) WithName(name string) Logger {
+	return slogLogger{log: l.log.With(slog.String("logger", name))}
+}
+func (l slogLogger) WithValues(keysAndValues ...any) Logger {
+	return slogLogger{log: l.log.With(keysAndValues...)}
 }

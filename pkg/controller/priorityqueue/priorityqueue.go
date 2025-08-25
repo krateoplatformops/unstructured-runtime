@@ -5,13 +5,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-logr/logr"
 	"github.com/google/btree"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 
+	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/workqueue/metrics"
 )
 
@@ -38,7 +38,7 @@ type Opts[T comparable] struct {
 	// limiter with an initial delay of five milliseconds and a max delay of 1000 seconds.
 	RateLimiter    workqueue.TypedRateLimiter[T]
 	MetricProvider workqueue.MetricsProvider
-	Log            logr.Logger
+	Log            logging.Logger
 }
 
 // Opt allows to configure a PriorityQueue.
@@ -57,6 +57,10 @@ func New[T comparable](name string, o ...Opt[T]) PriorityQueue[T] {
 
 	if opts.MetricProvider == nil {
 		opts.MetricProvider = metrics.WorkqueueMetricsProvider{}
+	}
+
+	if opts.Log == nil {
+		opts.Log = logging.NewNopLogger()
 	}
 
 	pq := &priorityqueue[T]{
@@ -89,7 +93,7 @@ func New[T comparable](name string, o ...Opt[T]) PriorityQueue[T] {
 }
 
 type priorityqueue[T comparable] struct {
-	log logr.Logger
+	log logging.Logger
 	// lock has to be acquired for any access any of items, queue, addedCounter
 	// or becameReady
 	lock  sync.Mutex
@@ -363,12 +367,6 @@ func (w *priorityqueue[T]) logState() {
 		case <-t:
 		}
 
-		// Log level may change at runtime, so keep the
-		// loop going even if a given level is currently
-		// not enabled.
-		if !w.log.V(5).Enabled() {
-			continue
-		}
 		w.lock.Lock()
 		items := make([]*item[T], 0, len(w.items))
 		w.queue.Ascend(func(item *item[T]) bool {
@@ -377,7 +375,7 @@ func (w *priorityqueue[T]) logState() {
 		})
 		w.lock.Unlock()
 
-		w.log.V(5).Info("workqueue_items", "items", items)
+		w.log.Debug("workqueue items", "items", items)
 	}
 }
 
