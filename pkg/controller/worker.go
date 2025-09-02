@@ -199,6 +199,8 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 		"queuedAt", evt.QueuedAt,
 	)
 
+	c.logger = lg
+
 	el, err := c.fetch(ctx, evt.ObjectRef, false)
 	if err != nil {
 		lg.Debug("Cannot fetch managed resource", "err", err) // This is returned as debug as debug info. This can occur normally if the resource was deleted.
@@ -220,7 +222,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 			return err
 		}
 
-		_, err := resourceCli.UpdateStatus(context.Background(), el, metav1.UpdateOptions{})
+		el, err := resourceCli.UpdateStatus(context.Background(), el, metav1.UpdateOptions{})
 		if err != nil {
 			log.Error(err, "Cannot update status")
 			c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateExternalResource, err))
@@ -239,7 +241,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 		if slices.Contains(el.GetFinalizers(), finalizerName) {
 			meta.RemoveFinalizer(el, finalizerName)
-			_, err = resourceCli.Update(context.Background(), el, metav1.UpdateOptions{})
+			el, err = resourceCli.Update(context.Background(), el, metav1.UpdateOptions{})
 			if err != nil {
 				log.Error(err, "Cannot remove finalizer")
 				c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
@@ -266,7 +268,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 			return err
 		}
 
-		_, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
+		el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
 		})
@@ -285,7 +287,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 		if !exist {
 			el.SetFinalizers(append(finalizers, finalizerName))
-			_, err = resourceCli.Update(context.Background(), el, metav1.UpdateOptions{})
+			el, err = resourceCli.Update(context.Background(), el, metav1.UpdateOptions{})
 			if err != nil {
 				lg.Error(err, "Cannot add finalizer")
 				c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
@@ -350,7 +352,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 			return err
 		}
 
-		_, err = tools.UpdateStatus(ctx, e, tools.UpdateOptions{
+		e, err = tools.UpdateStatus(ctx, e, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
 		})
@@ -408,7 +410,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 			c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
-		_, err = resourceCli.UpdateStatus(context.Background(), el, metav1.UpdateOptions{})
+		el, err = resourceCli.UpdateStatus(context.Background(), el, metav1.UpdateOptions{})
 		if err != nil {
 			log.Error(err, "Cannot update status")
 			c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
@@ -444,7 +446,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 	// don't use the CriticalAnnotationUpdater because we _want_ the
 	// update to fail if we get a 409 due to a stale version.
 	meta.SetExternalCreatePending(el, time.Now())
-	if _, uerr := resourceCli.Update(ctx, el, metav1.UpdateOptions{}); uerr != nil {
+	if el, uerr := resourceCli.Update(ctx, el, metav1.UpdateOptions{}); uerr != nil {
 		log.Error(uerr, errUpdateManaged)
 		c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionCreateEvent, errors.Wrap(uerr, errUpdateManaged)))
 		// If we cannot update the managed resource, we set the conditions
@@ -460,7 +462,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 			c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
-		_, err = resourceCli.UpdateStatus(context.Background(), el, metav1.UpdateOptions{})
+		el, err = resourceCli.UpdateStatus(context.Background(), el, metav1.UpdateOptions{})
 		if err != nil {
 			log.Error(err, "Cannot update status")
 			c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
@@ -494,7 +496,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 			c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
-		_, err = tools.Update(ctx, el, tools.UpdateOptions{
+		el, err = tools.Update(ctx, el, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
 		})
@@ -515,7 +517,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 	}
 
 	meta.SetExternalCreateSucceeded(el, time.Now())
-	if _, uerr := resourceCli.Update(ctx, el, metav1.UpdateOptions{}); uerr != nil {
+	if el, uerr := resourceCli.Update(ctx, el, metav1.UpdateOptions{}); uerr != nil {
 		log.Error(uerr, errUpdateManagedAnnotations)
 		c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, errors.Wrap(uerr, errUpdateManagedAnnotations)))
 		// If we cannot update the managed resource, we set the conditions
@@ -531,7 +533,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 			c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
-		_, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
+		el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
 		})
@@ -557,7 +559,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 		c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 		return err
 	}
-	_, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
+	el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 		Pluralizer:    c.pluralizer,
 		DynamicClient: c.dynamicClient,
 	})
@@ -602,7 +604,7 @@ func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) 
 			return err
 		}
 
-		_, err = tools.UpdateStatus(ctx, e, tools.UpdateOptions{
+		el, err = tools.UpdateStatus(ctx, e, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
 		})
@@ -628,7 +630,7 @@ func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) 
 		c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 		return err
 	}
-	_, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
+	el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 		Pluralizer:    c.pluralizer,
 		DynamicClient: c.dynamicClient,
 	})
@@ -667,7 +669,7 @@ func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) 
 			return err
 		}
 
-		_, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
+		el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
 		})
@@ -693,7 +695,7 @@ func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) 
 		c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 		return err
 	}
-	_, err = tools.Update(ctx, el, tools.UpdateOptions{
+	el, err = tools.Update(ctx, el, tools.UpdateOptions{
 		Pluralizer:    c.pluralizer,
 		DynamicClient: c.dynamicClient,
 	})
