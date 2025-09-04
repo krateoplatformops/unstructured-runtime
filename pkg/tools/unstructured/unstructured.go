@@ -129,6 +129,12 @@ func GetCondition(un *unstructured.Unstructured, condType string, reason string)
 }
 
 func SetFailedObjectRef(un *unstructured.Unstructured, ref *objectref.ObjectRef) error {
+	if ref == nil {
+		return fmt.Errorf("ref cannot be nil")
+	}
+	if un == nil {
+		return fmt.Errorf("un cannot be nil")
+	}
 	return setNestedFieldNoCopy(un, map[string]interface{}{
 		"apiVersion": ref.APIVersion,
 		"kind":       ref.Kind,
@@ -138,6 +144,9 @@ func SetFailedObjectRef(un *unstructured.Unstructured, ref *objectref.ObjectRef)
 }
 
 func ExtractFailedObjectRef(un *unstructured.Unstructured) (*objectref.ObjectRef, error) {
+	if un == nil {
+		return nil, fmt.Errorf("un cannot be nil")
+	}
 	obj, ok, err := unstructured.NestedFieldNoCopy(un.Object, "status", "failedObjectRef")
 	if err != nil {
 		return nil, err
@@ -160,6 +169,10 @@ func UnsetFailedObjectRef(un *unstructured.Unstructured) {
 	removeNestedField(un, "status", "failedObjectRef")
 }
 func setNestedFieldNoCopy(uns *unstructured.Unstructured, value interface{}, fields ...string) error {
+	if uns == nil {
+		return fmt.Errorf("uns cannot be nil")
+	}
+
 	m := uns.Object
 
 	for i, field := range fields[:len(fields)-1] {
@@ -181,6 +194,9 @@ func setNestedFieldNoCopy(uns *unstructured.Unstructured, value interface{}, fie
 
 // removeNestedField removes the nested field from the obj.
 func removeNestedField(uns *unstructured.Unstructured, fields ...string) {
+	if uns == nil {
+		return
+	}
 	m := uns.Object
 	for _, field := range fields[:len(fields)-1] {
 		if x, ok := m[field].(map[string]interface{}); ok {
@@ -215,6 +231,9 @@ func encodeStruct(obj interface{}) (res interface{}, err error) {
 }
 
 func GetFieldsFromUnstructured(u *unstructured.Unstructured, field string) (map[string]interface{}, error) {
+	if u == nil {
+		return nil, fmt.Errorf("unstructured cannot be nil")
+	}
 	spec, ok, err := unstructured.NestedFieldNoCopy(u.Object, field)
 	if err != nil {
 		return nil, err
@@ -235,6 +254,9 @@ func GetFieldsFromUnstructured(u *unstructured.Unstructured, field string) (map[
 }
 
 func IsConditionSet(un *unstructured.Unstructured, cond metav1.Condition) bool {
+	if un == nil {
+		return false
+	}
 	conds := GetConditions(un)
 	for _, co := range conds {
 		if co.Type == cond.Type && co.Status == cond.Status && co.Reason == cond.Reason {
