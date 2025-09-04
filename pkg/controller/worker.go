@@ -19,7 +19,8 @@ import (
 
 	"slices"
 
-	"k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/runtime"
+	runtimeUtil "k8s.io/apimachinery/pkg/util/runtime"
 )
 
 const (
@@ -108,7 +109,7 @@ func (c *Controller) runWorker(ctx context.Context) {
 		if !ok {
 			c.queue.Forget(obj)
 			c.queue.Done(obj)
-			runtime.HandleError(fmt.Errorf("unexpected object in queue: %v", obj))
+			runtimeUtil.HandleError(fmt.Errorf("unexpected object in queue: %v", obj))
 			continue
 		}
 
@@ -208,24 +209,25 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 		return nil
 	}
 
-	resourceCli := c.dynamicClient.Resource(c.gvr).Namespace(el.GetNamespace())
-
 	if meta.IsPaused(el) {
 		log := lg.WithValues("annotation", meta.AnnotationKeyReconciliationPaused)
 
 		log.Debug("Reconciliation is paused via the pause annotation")
-		c.recorder.Event(el, event.Normal(reasonReconciliationPaused, actionProcessEvent, "Reconciliation is paused via the pause annotation"))
+		c.recordEvent(el, event.Normal(reasonReconciliationPaused, actionProcessEvent, "Reconciliation is paused via the pause annotation"))
 		err = unstructuredtools.SetConditions(el, condition.ReconcilePaused())
 		if err != nil {
 			log.Error(err, "Cannot set condition")
-			c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
 
-		el, err := resourceCli.UpdateStatus(context.Background(), el, metav1.UpdateOptions{})
+		el, err := tools.UpdateStatus(context.Background(), el, tools.UpdateOptions{
+			Pluralizer:    c.pluralizer,
+			DynamicClient: c.dynamicClient,
+		})
 		if err != nil {
 			log.Error(err, "Cannot update status")
-			c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateExternalResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateExternalResource, err))
 			return err
 		}
 		// if the pause annotation is removed, we will have a chance to reconcile again and resume
@@ -241,10 +243,13 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 		if slices.Contains(el.GetFinalizers(), finalizerName) {
 			meta.RemoveFinalizer(el, finalizerName)
-			el, err = resourceCli.Update(context.Background(), el, metav1.UpdateOptions{})
+			el, err = tools.Update(context.Background(), el, tools.UpdateOptions{
+				Pluralizer:    c.pluralizer,
+				DynamicClient: c.dynamicClient,
+			})
 			if err != nil {
 				log.Error(err, "Cannot remove finalizer")
-				c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+				c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 				return err
 			}
 		}
@@ -256,7 +261,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 	// do is to refuse to proceed.
 	if meta.ExternalCreateIncomplete(el) {
 		lg.Warn(errCreateIncomplete)
-		c.recorder.Event(el, event.Warning(reasonCannotInitialize, actionProcessEvent, errors.New(errCreateIncomplete)))
+		c.recordEvent(el, event.Warning(reasonCannotInitialize, actionProcessEvent, errors.New(errCreateIncomplete)))
 
 		err = unstructuredtools.SetConditions(el,
 			condition.Creating(),
@@ -264,7 +269,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 		)
 		if err != nil {
 			lg.Error(err, "Cannot set condition")
-			c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
 
@@ -274,7 +279,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 		})
 		if err != nil {
 			lg.Error(err, "Cannot update status")
-			c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 			return err
 		}
 
@@ -287,10 +292,13 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 		if !exist {
 			el.SetFinalizers(append(finalizers, finalizerName))
-			el, err = resourceCli.Update(context.Background(), el, metav1.UpdateOptions{})
+			el, err = tools.Update(context.Background(), el, tools.UpdateOptions{
+				Pluralizer:    c.pluralizer,
+				DynamicClient: c.dynamicClient,
+			})
 			if err != nil {
 				lg.Error(err, "Cannot add finalizer")
-				c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+				c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 				return err
 			}
 		}
@@ -328,27 +336,24 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 	el, err := c.fetch(ctx, ref, false)
 	if err != nil {
 		log.Error(err, "Cannot fetch managed resource")
-		c.recorder.Event(el, event.Warning(reasonCannotFetchManaged, actionFetchManagedResource, err))
 		return err
 	}
-	resourceCli := c.dynamicClient.Resource(c.gvr).Namespace(el.GetNamespace())
 
 	observation, actionErr := c.externalClient.Observe(ctx, el)
 	if actionErr != nil {
-		c.recorder.Event(el, event.Warning(reasonCannotObserve, actionObserveExternalResource, actionErr))
+		c.recordEvent(el, event.Warning(reasonCannotObserve, actionObserveExternalResource, actionErr))
 		log.Error(actionErr, "Cannot observe external resource")
 
 		e, err := c.fetch(ctx, ref, false)
 		if err != nil {
 			log.Error(err, "Cannot fetch managed resource")
-			c.recorder.Event(el, event.Warning(reasonCannotFetchManaged, actionFetchManagedResource, err))
 			return err
 		}
 
 		err = unstructuredtools.SetConditions(e, condition.ReconcileError(errors.Wrap(actionErr, errReconcileObserve)))
 		if err != nil {
 			log.Error(err, "Cannot set condition")
-			c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
 
@@ -358,7 +363,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 		})
 		if err != nil {
 			log.Error(err, "Cannot update status")
-			c.recorder.Event(e, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+			c.recordEvent(e, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 			return err
 		}
 		return actionErr
@@ -367,7 +372,6 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 	el, err = c.fetch(ctx, ref, false)
 	if err != nil {
 		log.Error(err, "Cannot fetch managed resource")
-		c.recorder.Event(el, event.Warning(reasonCannotFetchManaged, actionFetchManagedResource, err))
 		return err
 	}
 
@@ -407,13 +411,16 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 		err = unstructuredtools.SetConditions(el, condition.ReconcileSuccess())
 		if err != nil {
 			log.Error(err, "Cannot set condition")
-			c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
-		el, err = resourceCli.UpdateStatus(context.Background(), el, metav1.UpdateOptions{})
+		el, err = tools.UpdateStatus(context.Background(), el, tools.UpdateOptions{
+			Pluralizer:    c.pluralizer,
+			DynamicClient: c.dynamicClient,
+		})
 		if err != nil {
 			log.Error(err, "Cannot update status")
-			c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 			return err
 		}
 		log.Info("External resource is up to date")
@@ -432,11 +439,8 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 	el, err := c.fetch(ctx, ref, false)
 	if err != nil {
 		log.Error(err, "Cannot fetch managed resource")
-		c.recorder.Event(el, event.Warning(reasonCannotFetchManaged, actionFetchManagedResource, err))
 		return err
 	}
-
-	resourceCli := c.dynamicClient.Resource(c.gvr).Namespace(el.GetNamespace())
 
 	// We write this annotation for two reasons. Firstly, it helps
 	// us to detect the case in which we fail to persist critical
@@ -446,26 +450,31 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 	// don't use the CriticalAnnotationUpdater because we _want_ the
 	// update to fail if we get a 409 due to a stale version.
 	meta.SetExternalCreatePending(el, time.Now())
-	if el, uerr := resourceCli.Update(ctx, el, metav1.UpdateOptions{}); uerr != nil {
+	if el, uerr := tools.Update(ctx, el, tools.UpdateOptions{
+		Pluralizer:    c.pluralizer,
+		DynamicClient: c.dynamicClient,
+	}); uerr != nil {
 		log.Error(uerr, errUpdateManaged)
-		c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionCreateEvent, errors.Wrap(uerr, errUpdateManaged)))
+		c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionCreateEvent, errors.Wrap(uerr, errUpdateManaged)))
 		// If we cannot update the managed resource, we set the conditions
 		el, err := c.fetch(ctx, ref, false)
 		if err != nil {
 			log.Error(err, "Cannot fetch managed resource")
-			c.recorder.Event(el, event.Warning(reasonCannotFetchManaged, actionFetchManagedResource, err))
 			return err
 		}
 		err = unstructuredtools.SetConditions(el, condition.Creating(), condition.ReconcileError(errors.Wrap(uerr, errUpdateManaged)))
 		if err != nil {
 			log.Error(err, "Cannot set conditions")
-			c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
-		el, err = resourceCli.UpdateStatus(context.Background(), el, metav1.UpdateOptions{})
+		el, err = tools.UpdateStatus(context.Background(), el, tools.UpdateOptions{
+			Pluralizer:    c.pluralizer,
+			DynamicClient: c.dynamicClient,
+		})
 		if err != nil {
 			log.Error(err, "Cannot update status")
-			c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 			return err
 		}
 		return errors.Wrap(uerr, errUpdateManaged)
@@ -474,18 +483,16 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 	el, err = c.fetch(ctx, ref, false)
 	if err != nil {
 		log.Error(err, "Cannot fetch managed resource")
-		c.recorder.Event(el, event.Warning(reasonCannotFetchManaged, actionFetchManagedResource, err))
 		return err
 	}
 
 	actionErr := c.externalClient.Create(ctx, el)
 	if actionErr != nil {
-		c.recorder.Event(el, event.Warning(reasonCannotCreate, actionCreateExternalResource, actionErr))
+		c.recordEvent(el, event.Warning(reasonCannotCreate, actionCreateExternalResource, actionErr))
 		log.Error(actionErr, "Cannot create external resource")
 		el, err := c.fetch(ctx, ref, false)
 		if err != nil {
 			log.Error(err, "Cannot fetch managed resource")
-			c.recorder.Event(el, event.Warning(reasonCannotFetchManaged, actionFetchManagedResource, err))
 			return err
 		}
 
@@ -493,7 +500,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 		err = unstructuredtools.SetConditions(el, condition.Creating(), condition.ReconcileError(errors.Wrap(actionErr, errReconcileCreate)))
 		if err != nil {
 			log.Error(err, "Cannot set conditions")
-			c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
 		el, err = tools.Update(ctx, el, tools.UpdateOptions{
@@ -502,7 +509,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 		})
 		if err != nil {
 			log.Error(err, "Cannot update managed resource")
-			c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 			return err
 		}
 
@@ -512,25 +519,26 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 	el, err = c.fetch(ctx, ref, false)
 	if err != nil {
 		log.Error(err, "Cannot fetch managed resource")
-		c.recorder.Event(el, event.Warning(reasonCannotFetchManaged, actionFetchManagedResource, err))
 		return err
 	}
 
 	meta.SetExternalCreateSucceeded(el, time.Now())
-	if el, uerr := resourceCli.Update(ctx, el, metav1.UpdateOptions{}); uerr != nil {
+	if el, uerr := tools.Update(ctx, el, tools.UpdateOptions{
+		Pluralizer:    c.pluralizer,
+		DynamicClient: c.dynamicClient,
+	}); uerr != nil {
 		log.Error(uerr, errUpdateManagedAnnotations)
-		c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, errors.Wrap(uerr, errUpdateManagedAnnotations)))
+		c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, errors.Wrap(uerr, errUpdateManagedAnnotations)))
 		// If we cannot update the managed resource, we set the conditions
 		el, err := c.fetch(ctx, ref, false)
 		if err != nil {
 			log.Error(err, "Cannot fetch managed resource")
-			c.recorder.Event(el, event.Warning(reasonCannotFetchManaged, actionFetchManagedResource, err))
 			return err
 		}
 		err = unstructuredtools.SetConditions(el, condition.Creating(), condition.ReconcileError(errors.Wrap(uerr, errUpdateManagedAnnotations)))
 		if err != nil {
 			log.Error(err, "Cannot set conditions")
-			c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
 		el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
@@ -539,7 +547,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 		})
 		if err != nil {
 			log.Error(err, "Cannot update status")
-			c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 			return err
 		}
 		return errors.Wrap(uerr, errUpdateManagedAnnotations)
@@ -550,13 +558,12 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 	el, err = c.fetch(ctx, ref, false)
 	if err != nil {
 		log.Error(err, "Cannot fetch managed resource")
-		c.recorder.Event(el, event.Warning(reasonCannotFetchManaged, actionFetchManagedResource, err))
 		return err
 	}
 	err = unstructuredtools.SetConditions(el, condition.ReconcileSuccess())
 	if err != nil {
 		log.Error(err, "Cannot set conditions")
-		c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
+		c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 		return err
 	}
 	el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
@@ -565,10 +572,10 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 	})
 	if err != nil {
 		log.Error(err, "Cannot update status")
-		c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+		c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 		return err
 	}
-	c.recorder.Event(el, event.Normal(reasonCreated, actionCreateEvent, "Successfully requested creation of external resource"))
+	c.recordEvent(el, event.Normal(reasonCreated, actionCreateEvent, "Successfully requested creation of external resource"))
 	return nil
 }
 
@@ -582,25 +589,23 @@ func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) 
 	el, err := c.fetch(ctx, ref, false)
 	if err != nil {
 		log.Error(err, "Cannot fetch managed resource")
-		c.recorder.Event(el, event.Warning(reasonCannotFetchManaged, actionFetchManagedResource, err))
 		return err
 	}
 
 	actionErr := c.externalClient.Update(ctx, el)
 	if actionErr != nil {
-		c.recorder.Event(el, event.Warning(reasonCannotUpdate, actionUpdateEvent, actionErr))
+		c.recordEvent(el, event.Warning(reasonCannotUpdate, actionUpdateEvent, actionErr))
 		log.Error(actionErr, "Cannot update external resource")
 		e, err := c.fetch(ctx, ref, false)
 		if err != nil {
 			log.Error(err, "Cannot fetch managed resource")
-			c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 			return err
 		}
 
 		err = unstructuredtools.SetConditions(e, condition.ReconcileError(errors.Wrap(actionErr, errReconcileUpdate)))
 		if err != nil {
 			log.Error(err, "Cannot set condition")
-			c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
 
@@ -610,7 +615,7 @@ func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) 
 		})
 		if err != nil {
 			log.Error(err, "Cannot update status")
-			c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 			return err
 		}
 
@@ -620,14 +625,13 @@ func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) 
 	el, err = c.fetch(ctx, ref, false)
 	if err != nil {
 		log.Error(err, "Cannot fetch managed resource")
-		c.recorder.Event(el, event.Warning(reasonCannotFetchManaged, actionFetchManagedResource, err))
 		return err
 	}
 
 	err = unstructuredtools.SetConditions(el, condition.ReconcileSuccess())
 	if err != nil {
 		log.Error(err, "Cannot set conditions")
-		c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
+		c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 		return err
 	}
 	el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
@@ -636,11 +640,11 @@ func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) 
 	})
 	if err != nil {
 		log.Error(err, "Cannot update status")
-		c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+		c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 		return err
 	}
 	log.Info("Successfully requested update of external resource")
-	c.recorder.Event(el, event.Normal(reasonUpdated, actionUpdateEvent, "Successfully requested update of external resource"))
+	c.recordEvent(el, event.Normal(reasonUpdated, actionUpdateEvent, "Successfully requested update of external resource"))
 	return nil
 }
 
@@ -654,18 +658,17 @@ func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) 
 	el, err := c.fetch(ctx, ref, false)
 	if err != nil {
 		log.Error(err, "Cannot fetch managed resource")
-		c.recorder.Event(el, event.Warning(reasonCannotFetchManaged, actionFetchManagedResource, err))
 		return err
 	}
 	actionErr := c.externalClient.Delete(ctx, el)
 	if actionErr != nil {
 		log.Error(actionErr, "Cannot delete external resource")
-		c.recorder.Event(el, event.Warning(reasonCannotDelete, actionDeleteExternalResource, actionErr))
+		c.recordEvent(el, event.Warning(reasonCannotDelete, actionDeleteExternalResource, actionErr))
 
 		err := unstructuredtools.SetConditions(el, condition.Deleting(), condition.ReconcileError(errors.Wrap(actionErr, errReconcileDelete)))
 		if err != nil {
 			log.Error(err, "Cannot set condition")
-			c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
 
@@ -675,7 +678,7 @@ func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) 
 		})
 		if err != nil {
 			log.Error(err, "Cannot update status")
-			c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+			c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 			return err
 		}
 		return actionErr
@@ -684,7 +687,6 @@ func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) 
 	el, err = c.fetch(ctx, ref, false)
 	if err != nil {
 		log.Error(err, "Cannot fetch managed resource")
-		c.recorder.Event(el, event.Warning(reasonCannotFetchManaged, actionFetchManagedResource, err))
 		return err
 	}
 
@@ -692,7 +694,7 @@ func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) 
 	err = unstructuredtools.SetConditions(el, condition.Deleting(), condition.ReconcileSuccess())
 	if err != nil {
 		log.Error(err, "Cannot set conditions")
-		c.recorder.Event(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
+		c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 		return err
 	}
 	el, err = tools.Update(ctx, el, tools.UpdateOptions{
@@ -701,15 +703,18 @@ func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) 
 	})
 	if err != nil {
 		log.Error(err, "Cannot update managed resource")
-		c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+		c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 		return err
 	}
 	log.Info("Successfully requested deletion of external resource")
-	c.recorder.Event(el, event.Normal(reasonDeleted, actionDeleteEvent, "Successfully requested deletion of external resource"))
+	c.recordEvent(el, event.Normal(reasonDeleted, actionDeleteEvent, "Successfully requested deletion of external resource"))
 	return nil
 }
 
 func (c *Controller) fetch(ctx context.Context, ref objectref.ObjectRef, clean bool) (*unstructured.Unstructured, error) {
+	if c.dynamicClient == nil {
+		return nil, fmt.Errorf("dynamic client is not configured")
+	}
 	res, err := c.dynamicClient.Resource(c.gvr).
 		Namespace(ref.Namespace).
 		Get(ctx, ref.Name, metav1.GetOptions{})
@@ -723,4 +728,13 @@ func (c *Controller) fetch(ctx context.Context, ref objectref.ObjectRef, clean b
 		}
 	}
 	return res, err
+}
+
+// Safe record event - do not panic if obj is nil
+func (c *Controller) recordEvent(obj runtime.Object, e event.Event) {
+	if obj == nil {
+		c.logger.Debug("Cannot record event, object is nil")
+		return
+	}
+	c.recorder.Event(obj, e)
 }

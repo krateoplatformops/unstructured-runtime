@@ -20,3 +20,13 @@ type Event struct {
 	ObjectRef objectref.ObjectRef
 	QueuedAt  time.Time
 }
+
+func (e Event) CompareTo(other Event) int {
+	if e.QueuedAt.Before(other.QueuedAt) {
+		return -1
+	}
+	if e.QueuedAt.After(other.QueuedAt) {
+		return 1
+	}
+	return 0
+}
