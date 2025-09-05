@@ -8,6 +8,8 @@ import (
 	"k8s.io/client-go/util/workqueue"
 )
 
+var _ workqueue.TypedRateLimiter[string] = &TypedItemExponentialTimedFailureRateLimiter[string]{}
+
 type FailureRequest struct {
 	// The number of times the request has been attempted
 	Attempts int

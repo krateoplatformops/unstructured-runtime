@@ -19,12 +19,10 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/shortid"
 	"github.com/prometheus/client_golang/prometheus"
-	"golang.org/x/time/rate"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
@@ -70,32 +68,59 @@ type ListWatcherConfiguration struct {
 
 type Options struct {
 	Client            dynamic.Interface
-	Discovery         discovery.DiscoveryInterface
 	GVR               schema.GroupVersionResource
 	Namespace         string
 	ResyncInterval    time.Duration
 	Recorder          event.Recorder
 	Logger            logging.Logger
-	ExternalClient    ExternalClient
 	ListWatcher       ListWatcherConfiguration
 	Pluralizer        pluralizer.PluralizerInterface
 	GlobalRateLimiter workqueue.TypedRateLimiter[any]
 	MetricsServer     metricsserver.Server
 	WatchAnnotations  ctrlevent.AnnotationEvents
+	MaxRetries        int
+}
+
+func (o Options) validate() error {
+	if o.Client == nil {
+		return fmt.Errorf("client is required")
+	}
+	if o.GVR.Empty() {
+		return fmt.Errorf("GVR is required")
+	}
+	if o.Recorder == nil {
+		return fmt.Errorf("recorder is required")
+	}
+	if o.Logger == nil {
+		return fmt.Errorf("logger is required")
+	}
+	if o.Pluralizer == nil {
+		return fmt.Errorf("pluralizer is required")
+	}
+	if o.GlobalRateLimiter == nil {
+		return fmt.Errorf("global rate limiter is required")
+	}
+	if o.ResyncInterval <= 0 {
+		return fmt.Errorf("resync interval must be greater than 0")
+	}
+	if o.MaxRetries < 0 {
+		return fmt.Errorf("max retries must be greater than or equal to 0")
+	}
+	return nil
 }
 
 type Controller struct {
-	metricsServer   metricsserver.Server
-	pluralizer      pluralizer.PluralizerInterface
-	dynamicClient   dynamic.Interface
-	discoveryClient discovery.DiscoveryInterface
-	gvr             schema.GroupVersionResource
-	queue           priorityqueue.PriorityQueue[any]
-	items           *sync.Map
-	informer        cache.Controller
-	recorder        event.Recorder
-	logger          logging.Logger
-	externalClient  ExternalClient
+	metricsServer  metricsserver.Server
+	pluralizer     pluralizer.PluralizerInterface
+	dynamicClient  dynamic.Interface
+	gvr            schema.GroupVersionResource
+	queue          priorityqueue.PriorityQueue[any]
+	items          *sync.Map
+	informer       cache.Controller
+	recorder       event.Recorder
+	logger         logging.Logger
+	externalClient ExternalClient
+	maxRetries     int
 }
 
 var (
@@ -121,22 +146,11 @@ func init() {
 	prometheus.MustRegister(reconcileDuration)
 }
 
-func New(sid *shortid.Shortid, opts Options) *Controller {
-	if opts.Client == nil {
-		return nil
+func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
+	if err := opts.validate(); err != nil {
+		opts.Logger.Error(err, "Invalid controller options")
+		return nil, fmt.Errorf("invalid controller options: %w", err)
 	}
-	if opts.Discovery == nil {
-		return nil
-	}
-
-	if opts.GlobalRateLimiter == nil {
-		opts.GlobalRateLimiter = workqueue.NewTypedMaxOfRateLimiter(
-			workqueue.NewTypedItemExponentialFailureRateLimiter[any](3*time.Second, 180*time.Second),
-			// 10 qps, 100 bucket size.  This is only for retry speed and its only the overall factor (not per item)
-			&workqueue.TypedBucketRateLimiter[any]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
-		)
-	}
-
 	queue := priorityqueue.New("controller", func(o *priorityqueue.Opts[any]) {
 		o.RateLimiter = opts.GlobalRateLimiter
 	})
@@ -144,7 +158,6 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 
 	lw, err := listwatcher.Create(listwatcher.CreateOption{
 		Client:        opts.Client,
-		Discovery:     opts.Discovery,
 		GVR:           opts.GVR,
 		LabelSelector: opts.ListWatcher.LabelSelector,
 		FieldSelector: opts.ListWatcher.FieldSelector,
@@ -152,7 +165,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 	})
 	if err != nil {
 		opts.Logger.Error(err, "Failed to create listwatcher.")
-		return nil
+		return nil, fmt.Errorf("failed to create listwatcher: %w", err)
 	}
 
 	_, informer := cache.NewInformerWithOptions(cache.InformerOptions{
@@ -189,8 +202,8 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				}
 				_, ok = annotations[meta.AnnotationKeyExternalCreateFailed]
 				_, ok_pending := annotations[meta.AnnotationKeyExternalCreatePending]
-				_, ok_succeded := annotations[meta.AnnotationKeyExternalCreateSucceeded]
-				if ok || ok_pending || ok_succeded {
+				_, ok_succedeed := annotations[meta.AnnotationKeyExternalCreateSucceeded]
+				if ok || ok_pending || ok_succedeed {
 					priority = LowPriority //These are events that are already being processed, so we can lower the priority
 				}
 
@@ -411,18 +424,17 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 		},
 	})
 	return &Controller{
-		dynamicClient:   opts.Client,
-		discoveryClient: opts.Discovery,
-		gvr:             opts.GVR,
-		items:           items,
-		recorder:        opts.Recorder,
-		logger:          opts.Logger,
-		informer:        informer,
-		queue:           queue,
-		externalClient:  opts.ExternalClient,
-		pluralizer:      opts.Pluralizer,
-		metricsServer:   opts.MetricsServer,
-	}
+		dynamicClient: opts.Client,
+		gvr:           opts.GVR,
+		items:         items,
+		recorder:      opts.Recorder,
+		logger:        opts.Logger,
+		informer:      informer,
+		queue:         queue,
+		pluralizer:    opts.Pluralizer,
+		metricsServer: opts.MetricsServer,
+		maxRetries:    opts.MaxRetries,
+	}, nil
 }
 
 func (c *Controller) SetExternalClient(ec ExternalClient) {

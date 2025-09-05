@@ -24,7 +24,6 @@ import (
 )
 
 const (
-	maxRetries    = 5
 	finalizerName = "composition.krateo.io/finalizer"
 )
 
@@ -168,6 +167,11 @@ func (c *Controller) handleErr(err error, obj ctrlevent.Event, priority int) {
 		return
 	}
 
+	if c.queue.NumRequeues(obj) >= c.maxRetries {
+		c.logger.WithValues("retries", c.queue.NumRequeues(obj)).Error(err, "dropping event out of the queue")
+		return
+	}
+
 	c.logger.WithValues("retries", c.queue.NumRequeues(obj)).
 		Debug("processing event, retrying", "error", err)
 
@@ -235,7 +239,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 		return nil
 	}
 
-	// If managed resource has a deletion timestamp and and a deletion policy of
+	// If managed resource has a deletion timestamp and a deletion policy of
 	// Orphan, we do not need to observe the external resource before attempting
 	// to remove finalizer.
 	if meta.WasDeleted(el) && !meta.ShouldDelete(el) {
