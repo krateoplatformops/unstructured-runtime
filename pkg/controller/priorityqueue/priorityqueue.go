@@ -330,7 +330,6 @@ func (w *priorityqueue[T]) Done(item T) {
 
 func (w *priorityqueue[T]) ShutDown() {
 	w.shutdown.Store(true)
-	close(w.done)
 }
 
 // ShutDownWithDrain just calls ShutDown, as the draining
