@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/krateoplatformops/plumbing/kubeutil/event"
+	contextutils "github.com/krateoplatformops/unstructured-runtime/pkg/context"
 	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/priorityqueue"
@@ -209,8 +210,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 		"queuedAt", evt.QueuedAt,
 	)
 
-	c.logger = lg
-
+	ctx = contextutils.BuildContext(ctx, contextutils.WithLogger(lg))
 	el, err := c.fetch(ctx, evt.ObjectRef, false)
 	if err != nil {
 		lg.Debug("Cannot fetch managed resource", "err", err) // This is returned as debug as debug info. This can occur normally if the resource was deleted.
@@ -335,7 +335,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 }
 
 func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef) error {
-	log := c.logger.WithValues("event", "observe")
+	log := contextutils.Logger(ctx).WithValues("event", "observe")
 
 	if c.externalClient == nil {
 		c.logger.Warn("No event handler registered.")
@@ -439,7 +439,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 }
 
 func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) error {
-	log := c.logger.WithValues("event", "create")
+	log := contextutils.Logger(ctx).WithValues("event", "create")
 
 	if c.externalClient == nil {
 		log.Warn("No event handler registered.")
@@ -589,7 +589,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 }
 
 func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) error {
-	log := c.logger.WithValues("event", "update")
+	log := contextutils.Logger(ctx).WithValues("event", "update")
 	if c.externalClient == nil {
 		log.Warn("No event handler registered.")
 		return nil
@@ -658,7 +658,7 @@ func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) 
 }
 
 func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) error {
-	log := c.logger.WithValues("event", "delete")
+	log := contextutils.Logger(ctx).WithValues("event", "delete")
 	if c.externalClient == nil {
 		log.Warn("No event handler registered.")
 		return nil
