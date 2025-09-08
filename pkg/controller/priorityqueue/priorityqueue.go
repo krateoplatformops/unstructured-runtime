@@ -330,7 +330,6 @@ func (w *priorityqueue[T]) Done(item T) {
 
 func (w *priorityqueue[T]) ShutDown() {
 	w.shutdown.Store(true)
-	close(w.done)
 }
 
 // ShutDownWithDrain just calls ShutDown, as the draining
@@ -347,7 +346,9 @@ func (w *priorityqueue[T]) Len() int {
 	defer w.lock.Unlock()
 
 	var result int
+	var count int
 	w.queue.Ascend(func(item *item[T]) bool {
+		count++
 		if item.ReadyAt == nil || item.ReadyAt.Compare(w.now()) <= 0 {
 			result++
 			return true

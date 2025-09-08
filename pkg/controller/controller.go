@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/krateoplatformops/plumbing/kubeutil/event"
+	"github.com/krateoplatformops/plumbing/shortid"
 	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/priorityqueue"
@@ -17,14 +18,11 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/shortid"
 	"github.com/prometheus/client_golang/prometheus"
-	"golang.org/x/time/rate"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
@@ -32,7 +30,6 @@ import (
 
 const (
 	reasonReconciliationPaused event.Reason = "ReconciliationPaused"
-	reasonReconciliationFailed event.Reason = "ReconciliationFailed"
 )
 
 const LowPriority = -100 //Low priority for the priorityqueue
@@ -70,32 +67,59 @@ type ListWatcherConfiguration struct {
 
 type Options struct {
 	Client            dynamic.Interface
-	Discovery         discovery.DiscoveryInterface
 	GVR               schema.GroupVersionResource
 	Namespace         string
 	ResyncInterval    time.Duration
 	Recorder          event.Recorder
 	Logger            logging.Logger
-	ExternalClient    ExternalClient
 	ListWatcher       ListWatcherConfiguration
 	Pluralizer        pluralizer.PluralizerInterface
 	GlobalRateLimiter workqueue.TypedRateLimiter[any]
 	MetricsServer     metricsserver.Server
 	WatchAnnotations  ctrlevent.AnnotationEvents
+	MaxRetries        int
+}
+
+func (o Options) validate() error {
+	if o.Client == nil {
+		return fmt.Errorf("client is required")
+	}
+	if o.GVR.Empty() {
+		return fmt.Errorf("GVR is required")
+	}
+	if o.Recorder == nil {
+		return fmt.Errorf("recorder is required")
+	}
+	if o.Logger == nil {
+		return fmt.Errorf("logger is required")
+	}
+	if o.Pluralizer == nil {
+		return fmt.Errorf("pluralizer is required")
+	}
+	if o.GlobalRateLimiter == nil {
+		return fmt.Errorf("global rate limiter is required")
+	}
+	if o.ResyncInterval <= 0 {
+		return fmt.Errorf("resync interval must be greater than 0")
+	}
+	if o.MaxRetries < 0 {
+		return fmt.Errorf("max retries must be greater than or equal to 0")
+	}
+	return nil
 }
 
 type Controller struct {
-	metricsServer   metricsserver.Server
-	pluralizer      pluralizer.PluralizerInterface
-	dynamicClient   dynamic.Interface
-	discoveryClient discovery.DiscoveryInterface
-	gvr             schema.GroupVersionResource
-	queue           priorityqueue.PriorityQueue[any]
-	items           *sync.Map
-	informer        cache.Controller
-	recorder        event.Recorder
-	logger          logging.Logger
-	externalClient  ExternalClient
+	metricsServer  metricsserver.Server
+	pluralizer     pluralizer.PluralizerInterface
+	dynamicClient  dynamic.Interface
+	gvr            schema.GroupVersionResource
+	queue          priorityqueue.PriorityQueue[any]
+	items          *sync.Map
+	informer       cache.Controller
+	recorder       event.Recorder
+	logger         logging.Logger
+	externalClient ExternalClient
+	maxRetries     int
 }
 
 var (
@@ -121,22 +145,11 @@ func init() {
 	prometheus.MustRegister(reconcileDuration)
 }
 
-func New(sid *shortid.Shortid, opts Options) *Controller {
-	if opts.Client == nil {
-		return nil
+func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
+	if err := opts.validate(); err != nil {
+		opts.Logger.Error(err, "Invalid controller options")
+		return nil, fmt.Errorf("invalid controller options: %w", err)
 	}
-	if opts.Discovery == nil {
-		return nil
-	}
-
-	if opts.GlobalRateLimiter == nil {
-		opts.GlobalRateLimiter = workqueue.NewTypedMaxOfRateLimiter(
-			workqueue.NewTypedItemExponentialFailureRateLimiter[any](3*time.Second, 180*time.Second),
-			// 10 qps, 100 bucket size.  This is only for retry speed and its only the overall factor (not per item)
-			&workqueue.TypedBucketRateLimiter[any]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
-		)
-	}
-
 	queue := priorityqueue.New("controller", func(o *priorityqueue.Opts[any]) {
 		o.RateLimiter = opts.GlobalRateLimiter
 	})
@@ -144,7 +157,6 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 
 	lw, err := listwatcher.Create(listwatcher.CreateOption{
 		Client:        opts.Client,
-		Discovery:     opts.Discovery,
 		GVR:           opts.GVR,
 		LabelSelector: opts.ListWatcher.LabelSelector,
 		FieldSelector: opts.ListWatcher.FieldSelector,
@@ -152,7 +164,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 	})
 	if err != nil {
 		opts.Logger.Error(err, "Failed to create listwatcher.")
-		return nil
+		return nil, fmt.Errorf("failed to create listwatcher: %w", err)
 	}
 
 	_, informer := cache.NewInformerWithOptions(cache.InformerOptions{
@@ -189,8 +201,8 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 				}
 				_, ok = annotations[meta.AnnotationKeyExternalCreateFailed]
 				_, ok_pending := annotations[meta.AnnotationKeyExternalCreatePending]
-				_, ok_succeded := annotations[meta.AnnotationKeyExternalCreateSucceeded]
-				if ok || ok_pending || ok_succeded {
+				_, ok_succedeed := annotations[meta.AnnotationKeyExternalCreateSucceeded]
+				if ok || ok_pending || ok_succedeed {
 					priority = LowPriority //These are events that are already being processed, so we can lower the priority
 				}
 
@@ -202,6 +214,9 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 						"namespace", item.ObjectRef.Namespace,
 						"queuedAt", item.QueuedAt,
 					).Debug("Adding Observe event to queue", "priority", priority)
+					// Generally a user event, occurs when a user creates a resource or the resource is first seen
+					// by the controller. We want to process these events as soon as possible, so we add them to the front of the queue.
+					// However, if the resource has an annotation that indicates it is being processed, we lower the priority.
 					queue.AddWithOpts(priorityqueue.AddOpts{
 						RateLimited: false,
 						Priority:    priority,
@@ -246,6 +261,9 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 							"namespace", item.ObjectRef.Namespace,
 							"queuedAt", item.QueuedAt,
 						).Debug("Adding Delete event to queue", "priority", HighPriority)
+						// Generally this is a pending delete event, where the resource has a deletion timestamp but was not effectively deleted yet.
+						// We want to process these events as soon as possible, so we add the event with high priority.
+						// This is a user event, so we want to process it quickly.
 						queue.AddWithOpts(priorityqueue.AddOpts{
 							RateLimited: false,
 							Priority:    HighPriority,
@@ -292,6 +310,9 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 								"namespace", item.ObjectRef.Namespace,
 								"queuedAt", item.QueuedAt,
 							).Debug("Adding event to queue for annotation change", "priority", NormalPriority, "eventType", event.EventType, "annotation", event.Annotation)
+							// Generally a user event, occurs when a user changes an annotation we are watching. We want to process these events as soon as possible, so we add them to the front of the queue.
+							// We use normal priority because these are user events that should be processed quickly, but they are not as urgent as create or delete events.
+							// This is a user event, so we want to process it quickly.
 							queue.AddWithOpts(priorityqueue.AddOpts{
 								RateLimited: false,
 								Priority:    NormalPriority,
@@ -337,6 +358,9 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 							"namespace", item.ObjectRef.Namespace,
 							"queuedAt", item.QueuedAt,
 						).Debug("Adding Update event to queue", "priority", HighPriority)
+						// Generally a user event, occurs when a user updates the spec of a resource. We want to process these events as soon as possible, so we add them to the front of the queue.
+						// We use high priority because these are user events that should be processed quickly.
+						// This is a user event, so we want to process it quickly.
 						queue.AddWithOpts(priorityqueue.AddOpts{
 							RateLimited: false,
 							Priority:    HighPriority,
@@ -358,6 +382,7 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 
 					if _, loaded := items.Load(dig); !loaded {
 						items.Store(dig, struct{}{})
+						priority := LowPriority
 						time.AfterFunc(opts.ResyncInterval, func() {
 							log.WithValues(
 								"kind", item.ObjectRef.Kind,
@@ -365,10 +390,13 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 								"name", item.ObjectRef.Name,
 								"namespace", item.ObjectRef.Namespace,
 								"queuedAt", item.QueuedAt,
-							).Debug("Adding Observe event to queue")
+								"priority", priority,
+							).Debug("Adding Observe event to queue, normal requeue after update with no spec change")
+							// This is a normal requeue after an update with no spec change.This is not a user event.
+							// We use low priority because these events are not urgent and can be processed later.
 							queue.AddWithOpts(priorityqueue.AddOpts{
 								RateLimited: true,
-								Priority:    LowPriority,
+								Priority:    priority,
 							}, item)
 						})
 					}
@@ -403,6 +431,8 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 					"namespace", item.ObjectRef.Namespace,
 					"queuedAt", item.QueuedAt,
 				).Debug("Adding Delete event to queue")
+				// Generally this is a delete event where the resource is already gone. We want to process these events as soon as possible, so we add the event with high priority.
+				// This is a user event, so we want to process it quickly.
 				queue.AddWithOpts(priorityqueue.AddOpts{
 					RateLimited: false,
 					Priority:    HighPriority,
@@ -411,18 +441,17 @@ func New(sid *shortid.Shortid, opts Options) *Controller {
 		},
 	})
 	return &Controller{
-		dynamicClient:   opts.Client,
-		discoveryClient: opts.Discovery,
-		gvr:             opts.GVR,
-		items:           items,
-		recorder:        opts.Recorder,
-		logger:          opts.Logger,
-		informer:        informer,
-		queue:           queue,
-		externalClient:  opts.ExternalClient,
-		pluralizer:      opts.Pluralizer,
-		metricsServer:   opts.MetricsServer,
-	}
+		dynamicClient: opts.Client,
+		gvr:           opts.GVR,
+		items:         items,
+		recorder:      opts.Recorder,
+		logger:        opts.Logger,
+		informer:      informer,
+		queue:         queue,
+		pluralizer:    opts.Pluralizer,
+		metricsServer: opts.MetricsServer,
+		maxRetries:    opts.MaxRetries,
+	}, nil
 }
 
 func (c *Controller) SetExternalClient(ec ExternalClient) {

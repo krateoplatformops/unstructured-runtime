@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/krateoplatformops/plumbing/kubeutil/event"
+	contextutils "github.com/krateoplatformops/unstructured-runtime/pkg/context"
 	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/priorityqueue"
@@ -24,7 +25,6 @@ import (
 )
 
 const (
-	maxRetries    = 5
 	finalizerName = "composition.krateo.io/finalizer"
 )
 
@@ -102,6 +102,7 @@ func (c *Controller) runWorker(ctx context.Context) {
 	for {
 		obj, priority, shutdown := c.queue.GetWithPriority()
 		if shutdown {
+			c.logger.Info("Shutting down worker", "workerID", workerID)
 			break
 		}
 
@@ -168,8 +169,10 @@ func (c *Controller) handleErr(err error, obj ctrlevent.Event, priority int) {
 		return
 	}
 
-	c.logger.WithValues("retries", c.queue.NumRequeues(obj)).
-		Debug("processing event, retrying", "error", err)
+	if c.queue.NumRequeues(obj) >= c.maxRetries {
+		c.logger.WithValues("retries", c.queue.NumRequeues(obj), "queueLenght", c.queue.Len()).Debug("dropping event out of the queue, max retries reached", "error", err.Error())
+		return
+	}
 
 	// Preserve original queue timestamp for retry
 	retryEvent := obj
@@ -177,10 +180,17 @@ func (c *Controller) handleErr(err error, obj ctrlevent.Event, priority int) {
 		retryEvent.QueuedAt = time.Now() // Set timestamp if missing
 	}
 
-	c.queue.AddWithOpts(priorityqueue.AddOpts{
-		RateLimited: true, // Always rate limit retries to avoid overwhelming the controller
-		Priority:    priority,
-	}, obj)
+	dig := ctrlevent.DigestForEvent(retryEvent)
+	if _, loaded := c.items.Load(dig); !loaded {
+		c.logger.WithValues("retries", c.queue.NumRequeues(obj)).
+			Debug("handling event, requequeing", "error", err)
+
+		c.items.Store(dig, struct{}{})
+		c.queue.AddWithOpts(priorityqueue.AddOpts{
+			RateLimited: true, // Always rate limit retries to avoid overwhelming the controller
+			Priority:    priority,
+		}, obj)
+	}
 }
 
 func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
@@ -200,8 +210,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 		"queuedAt", evt.QueuedAt,
 	)
 
-	c.logger = lg
-
+	ctx = contextutils.BuildContext(ctx, contextutils.WithLogger(lg))
 	el, err := c.fetch(ctx, evt.ObjectRef, false)
 	if err != nil {
 		lg.Debug("Cannot fetch managed resource", "err", err) // This is returned as debug as debug info. This can occur normally if the resource was deleted.
@@ -221,7 +230,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 			return err
 		}
 
-		el, err := tools.UpdateStatus(context.Background(), el, tools.UpdateOptions{
+		el, err := tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
 		})
@@ -235,7 +244,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 		return nil
 	}
 
-	// If managed resource has a deletion timestamp and and a deletion policy of
+	// If managed resource has a deletion timestamp and a deletion policy of
 	// Orphan, we do not need to observe the external resource before attempting
 	// to remove finalizer.
 	if meta.WasDeleted(el) && !meta.ShouldDelete(el) {
@@ -243,7 +252,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 		if slices.Contains(el.GetFinalizers(), finalizerName) {
 			meta.RemoveFinalizer(el, finalizerName)
-			el, err = tools.Update(context.Background(), el, tools.UpdateOptions{
+			el, err = tools.Update(ctx, el, tools.UpdateOptions{
 				Pluralizer:    c.pluralizer,
 				DynamicClient: c.dynamicClient,
 			})
@@ -292,7 +301,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 		if !exist {
 			el.SetFinalizers(append(finalizers, finalizerName))
-			el, err = tools.Update(context.Background(), el, tools.UpdateOptions{
+			el, err = tools.Update(ctx, el, tools.UpdateOptions{
 				Pluralizer:    c.pluralizer,
 				DynamicClient: c.dynamicClient,
 			})
@@ -326,7 +335,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 }
 
 func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef) error {
-	log := c.logger.WithValues("event", "observe")
+	log := contextutils.Logger(ctx).WithValues("event", "observe")
 
 	if c.externalClient == nil {
 		c.logger.Warn("No event handler registered.")
@@ -414,7 +423,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
-		el, err = tools.UpdateStatus(context.Background(), el, tools.UpdateOptions{
+		el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
 		})
@@ -430,7 +439,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 }
 
 func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) error {
-	log := c.logger.WithValues("event", "create")
+	log := contextutils.Logger(ctx).WithValues("event", "create")
 
 	if c.externalClient == nil {
 		log.Warn("No event handler registered.")
@@ -468,7 +477,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
-		el, err = tools.UpdateStatus(context.Background(), el, tools.UpdateOptions{
+		el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
 		})
@@ -580,7 +589,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 }
 
 func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) error {
-	log := c.logger.WithValues("event", "update")
+	log := contextutils.Logger(ctx).WithValues("event", "update")
 	if c.externalClient == nil {
 		log.Warn("No event handler registered.")
 		return nil
@@ -649,7 +658,7 @@ func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) 
 }
 
 func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) error {
-	log := c.logger.WithValues("event", "delete")
+	log := contextutils.Logger(ctx).WithValues("event", "delete")
 	if c.externalClient == nil {
 		log.Warn("No event handler registered.")
 		return nil

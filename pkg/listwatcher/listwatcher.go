@@ -7,7 +7,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/cache"
 )
@@ -18,7 +17,6 @@ const (
 
 type CreateOption struct {
 	Client        dynamic.Interface
-	Discovery     discovery.DiscoveryInterface
 	GVR           schema.GroupVersionResource
 	LabelSelector *string
 	FieldSelector *string
