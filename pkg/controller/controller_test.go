@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -884,7 +885,7 @@ func TestControllerRun(t *testing.T) {
 
 			// Verify metrics server was started if configured
 			if tt.metricsServer {
-				assert.True(t, metricsServer.started, "Expected metrics server to be started")
+				assert.True(t, metricsServer.Started(), "Expected metrics server to be started")
 			}
 		})
 	}
@@ -969,7 +970,7 @@ func TestControllerRun_MetricsServerError(t *testing.T) {
 	assert.NoError(t, err)
 
 	// But metrics server should have attempted to start and logged error
-	assert.True(t, metricsServer.started, "Expected metrics server start to be attempted")
+	assert.True(t, metricsServer.Started(), "Expected metrics server start to be attempted")
 }
 
 // Mock metrics server for testing
@@ -977,6 +978,8 @@ type mockMetricsServer struct {
 	started     bool
 	shouldError bool
 	errorMsg    string
+	// protect concurrent access to `started` (avoids data races when Start runs in a goroutine)
+	mu sync.Mutex
 }
 
 func (m *mockMetricsServer) WithLogger(logger logging.Logger) metricsserver.Server {
@@ -992,11 +995,22 @@ func (m *mockMetricsServer) NeedLeaderElection() bool {
 }
 
 func (m *mockMetricsServer) Start(ctx context.Context) error {
+	m.mu.Lock()
 	m.started = true
+	m.mu.Unlock()
+
 	if m.shouldError {
 		return fmt.Errorf("%s", m.errorMsg)
 	}
 	// Block until context is cancelled to simulate real server behavior
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+// Started returns whether Start() was invoked. Use this instead of reading the
+// field directly to avoid data races.
+func (m *mockMetricsServer) Started() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.started
 }
