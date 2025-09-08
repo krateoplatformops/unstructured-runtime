@@ -101,6 +101,7 @@ func (c *Controller) runWorker(ctx context.Context) {
 	for {
 		obj, priority, shutdown := c.queue.GetWithPriority()
 		if shutdown {
+			c.logger.Info("Shutting down worker", "workerID", workerID)
 			break
 		}
 
@@ -168,12 +169,9 @@ func (c *Controller) handleErr(err error, obj ctrlevent.Event, priority int) {
 	}
 
 	if c.queue.NumRequeues(obj) >= c.maxRetries {
-		c.logger.WithValues("retries", c.queue.NumRequeues(obj)).Error(err, "dropping event out of the queue")
+		c.logger.WithValues("retries", c.queue.NumRequeues(obj), "queueLenght", c.queue.Len()).Debug("dropping event out of the queue, max retries reached", "error", err.Error())
 		return
 	}
-
-	c.logger.WithValues("retries", c.queue.NumRequeues(obj)).
-		Debug("processing event, retrying", "error", err)
 
 	// Preserve original queue timestamp for retry
 	retryEvent := obj
@@ -181,10 +179,17 @@ func (c *Controller) handleErr(err error, obj ctrlevent.Event, priority int) {
 		retryEvent.QueuedAt = time.Now() // Set timestamp if missing
 	}
 
-	c.queue.AddWithOpts(priorityqueue.AddOpts{
-		RateLimited: true, // Always rate limit retries to avoid overwhelming the controller
-		Priority:    priority,
-	}, obj)
+	dig := ctrlevent.DigestForEvent(retryEvent)
+	if _, loaded := c.items.Load(dig); !loaded {
+		c.logger.WithValues("retries", c.queue.NumRequeues(obj)).
+			Debug("handling event, requequeing", "error", err)
+
+		c.items.Store(dig, struct{}{})
+		c.queue.AddWithOpts(priorityqueue.AddOpts{
+			RateLimited: true, // Always rate limit retries to avoid overwhelming the controller
+			Priority:    priority,
+		}, obj)
+	}
 }
 
 func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
@@ -225,7 +230,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 			return err
 		}
 
-		el, err := tools.UpdateStatus(context.Background(), el, tools.UpdateOptions{
+		el, err := tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
 		})
@@ -247,7 +252,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 		if slices.Contains(el.GetFinalizers(), finalizerName) {
 			meta.RemoveFinalizer(el, finalizerName)
-			el, err = tools.Update(context.Background(), el, tools.UpdateOptions{
+			el, err = tools.Update(ctx, el, tools.UpdateOptions{
 				Pluralizer:    c.pluralizer,
 				DynamicClient: c.dynamicClient,
 			})
@@ -296,7 +301,7 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 
 		if !exist {
 			el.SetFinalizers(append(finalizers, finalizerName))
-			el, err = tools.Update(context.Background(), el, tools.UpdateOptions{
+			el, err = tools.Update(ctx, el, tools.UpdateOptions{
 				Pluralizer:    c.pluralizer,
 				DynamicClient: c.dynamicClient,
 			})
@@ -418,7 +423,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
-		el, err = tools.UpdateStatus(context.Background(), el, tools.UpdateOptions{
+		el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
 		})
@@ -472,7 +477,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
-		el, err = tools.UpdateStatus(context.Background(), el, tools.UpdateOptions{
+		el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
 		})

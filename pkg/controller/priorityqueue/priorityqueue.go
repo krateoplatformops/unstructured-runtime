@@ -346,7 +346,9 @@ func (w *priorityqueue[T]) Len() int {
 	defer w.lock.Unlock()
 
 	var result int
+	var count int
 	w.queue.Ascend(func(item *item[T]) bool {
+		count++
 		if item.ReadyAt == nil || item.ReadyAt.Compare(w.now()) <= 0 {
 			result++
 			return true

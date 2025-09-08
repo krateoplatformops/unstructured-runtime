@@ -30,7 +30,6 @@ import (
 
 const (
 	reasonReconciliationPaused event.Reason = "ReconciliationPaused"
-	reasonReconciliationFailed event.Reason = "ReconciliationFailed"
 )
 
 const LowPriority = -100 //Low priority for the priorityqueue
@@ -215,6 +214,9 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 						"namespace", item.ObjectRef.Namespace,
 						"queuedAt", item.QueuedAt,
 					).Debug("Adding Observe event to queue", "priority", priority)
+					// Generally a user event, occurs when a user creates a resource or the resource is first seen
+					// by the controller. We want to process these events as soon as possible, so we add them to the front of the queue.
+					// However, if the resource has an annotation that indicates it is being processed, we lower the priority.
 					queue.AddWithOpts(priorityqueue.AddOpts{
 						RateLimited: false,
 						Priority:    priority,
@@ -259,6 +261,9 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 							"namespace", item.ObjectRef.Namespace,
 							"queuedAt", item.QueuedAt,
 						).Debug("Adding Delete event to queue", "priority", HighPriority)
+						// Generally this is a pending delete event, where the resource has a deletion timestamp but was not effectively deleted yet.
+						// We want to process these events as soon as possible, so we add the event with high priority.
+						// This is a user event, so we want to process it quickly.
 						queue.AddWithOpts(priorityqueue.AddOpts{
 							RateLimited: false,
 							Priority:    HighPriority,
@@ -305,6 +310,9 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 								"namespace", item.ObjectRef.Namespace,
 								"queuedAt", item.QueuedAt,
 							).Debug("Adding event to queue for annotation change", "priority", NormalPriority, "eventType", event.EventType, "annotation", event.Annotation)
+							// Generally a user event, occurs when a user changes an annotation we are watching. We want to process these events as soon as possible, so we add them to the front of the queue.
+							// We use normal priority because these are user events that should be processed quickly, but they are not as urgent as create or delete events.
+							// This is a user event, so we want to process it quickly.
 							queue.AddWithOpts(priorityqueue.AddOpts{
 								RateLimited: false,
 								Priority:    NormalPriority,
@@ -350,6 +358,9 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 							"namespace", item.ObjectRef.Namespace,
 							"queuedAt", item.QueuedAt,
 						).Debug("Adding Update event to queue", "priority", HighPriority)
+						// Generally a user event, occurs when a user updates the spec of a resource. We want to process these events as soon as possible, so we add them to the front of the queue.
+						// We use high priority because these are user events that should be processed quickly.
+						// This is a user event, so we want to process it quickly.
 						queue.AddWithOpts(priorityqueue.AddOpts{
 							RateLimited: false,
 							Priority:    HighPriority,
@@ -371,6 +382,7 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 
 					if _, loaded := items.Load(dig); !loaded {
 						items.Store(dig, struct{}{})
+						priority := LowPriority
 						time.AfterFunc(opts.ResyncInterval, func() {
 							log.WithValues(
 								"kind", item.ObjectRef.Kind,
@@ -378,10 +390,13 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 								"name", item.ObjectRef.Name,
 								"namespace", item.ObjectRef.Namespace,
 								"queuedAt", item.QueuedAt,
-							).Debug("Adding Observe event to queue")
+								"priority", priority,
+							).Debug("Adding Observe event to queue, normal requeue after update with no spec change")
+							// This is a normal requeue after an update with no spec change.This is not a user event.
+							// We use low priority because these events are not urgent and can be processed later.
 							queue.AddWithOpts(priorityqueue.AddOpts{
 								RateLimited: true,
-								Priority:    LowPriority,
+								Priority:    priority,
 							}, item)
 						})
 					}
@@ -416,6 +431,8 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 					"namespace", item.ObjectRef.Namespace,
 					"queuedAt", item.QueuedAt,
 				).Debug("Adding Delete event to queue")
+				// Generally this is a delete event where the resource is already gone. We want to process these events as soon as possible, so we add the event with high priority.
+				// This is a user event, so we want to process it quickly.
 				queue.AddWithOpts(priorityqueue.AddOpts{
 					RateLimited: false,
 					Priority:    HighPriority,

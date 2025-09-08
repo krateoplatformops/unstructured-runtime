@@ -4,12 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/krateoplatformops/unstructured-runtime/pkg/workqueue"
+
+	"github.com/go-logr/logr"
+	prettylog "github.com/krateoplatformops/plumbing/slogs/pretty"
 	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/priorityqueue"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/shortid"
 	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
@@ -72,9 +79,18 @@ func (f *fakeExternalClientObserveError) Delete(ctx context.Context, mg *unstruc
 func TestRunWorker_RequeuesOnProcessErrorAndRemovesItem(t *testing.T) {
 	sid, err := shortid.New(1, shortid.DefaultABC, 2342)
 	require.NoError(t, err)
-
+	lh := prettylog.New(&slog.HandlerOptions{
+		Level:     slog.LevelDebug,
+		AddSource: false,
+	},
+		prettylog.WithDestinationWriter(os.Stderr),
+		prettylog.WithOutputEmptyAttrs(),
+	)
 	opts := createTestOptions()
-	opts.MaxRetries = 10
+	opts.MaxRetries = 3
+	opts.ResyncInterval = 3 * time.Second
+	opts.GlobalRateLimiter = workqueue.NewExponentialTimedFailureRateLimiter[any](1*time.Millisecond, 100*time.Millisecond)
+	opts.Logger = logging.NewLogrLogger(logr.FromSlogHandler(slog.New(lh).Handler()))
 	ctrl, err := New(sid, opts)
 	require.NoError(t, err)
 	require.NotNil(t, ctrl)
@@ -114,7 +130,7 @@ func TestRunWorker_RequeuesOnProcessErrorAndRemovesItem(t *testing.T) {
 	// wait for a requeue to appear (handleErr should add it back)
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if ctrl.queue.NumRequeues(item) >= 1 {
+		if ctrl.queue.NumRequeues(item) >= 3 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -125,6 +141,49 @@ func TestRunWorker_RequeuesOnProcessErrorAndRemovesItem(t *testing.T) {
 	// ensure the digest was removed from items by runWorker
 	_, ok := ctrl.items.Load(dig)
 	require.False(t, ok, "expected digest to be removed from controller.items after processing")
+}
+
+func TestRunWorker_ShutDown(t *testing.T) {
+	sid, err := shortid.New(1, shortid.DefaultABC, 2342)
+	require.NoError(t, err)
+
+	opts := createTestOptions()
+	opts.MaxRetries = 10
+	ctrl, err := New(sid, opts)
+	require.NoError(t, err)
+	require.NotNil(t, ctrl)
+
+	// create managed object that processItem will fetch
+	obj := createTestUnstructured("rw-obj", opts.Namespace)
+	_, err = opts.Client.Resource(opts.GVR).Namespace(opts.Namespace).Create(context.TODO(), obj, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	// set external client that returns an error on Observe to force processItem -> error
+	ctrl.SetExternalClient(&fakeExternalClientObserveError{err: fmt.Errorf("observe-boom")})
+
+	// build event and store its digest in items (the real flow sets this before queueing)
+	item := ctrlevent.Event{
+		EventType: ctrlevent.Observe,
+		ObjectRef: objectref.ObjectRef{
+			APIVersion: obj.GetAPIVersion(),
+			Kind:       obj.GetKind(),
+			Name:       obj.GetName(),
+			Namespace:  obj.GetNamespace(),
+		},
+		QueuedAt: time.Now(),
+	}
+	dig := ctrlevent.DigestForEvent(item)
+	ctrl.items.Store(dig, struct{}{})
+
+	// enqueue the event
+	ctrl.queue.AddWithOpts(priorityqueue.AddOpts{RateLimited: false, Priority: NormalPriority}, item)
+
+	// run worker in goroutine
+	done := make(chan struct{})
+	go func() {
+		ctrl.runWorker(context.Background())
+		close(done)
+	}()
 
 	// shutdown queue to allow runWorker to exit and wait for goroutine
 	ctrl.queue.ShutDown()

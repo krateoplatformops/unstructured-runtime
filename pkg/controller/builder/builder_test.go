@@ -102,7 +102,7 @@ func TestConfigurationValidate(t *testing.T) {
 
 func TestNew_ReturnsError_OnInvalidConfiguration(t *testing.T) {
 	// Passing an invalid configuration (nil Config) should return an error early.
-	_, err := New(context.Background(), Configuration{
+	_, err := Build(context.Background(), Configuration{
 		Config:       nil,
 		GVR:          schema.GroupVersionResource{Group: "g", Version: "v", Resource: "r"},
 		ProviderName: "p",
@@ -112,7 +112,7 @@ func TestNew_ReturnsError_OnInvalidConfiguration(t *testing.T) {
 
 func TestNew_ReturnsController(t *testing.T) {
 	// Passing a valid configuration should return a controller instance.
-	c, err := New(context.Background(), Configuration{
+	c, err := Build(context.Background(), Configuration{
 		Config:       &rest.Config{},
 		GVR:          schema.GroupVersionResource{Group: "g", Version: "v", Resource: "r"},
 		ProviderName: "p",

@@ -49,7 +49,9 @@ func (c Configuration) validate() error {
 	return nil
 }
 
-func New(ctx context.Context, conf Configuration, optsFuncs ...func(o *options)) (*controller.Controller, error) {
+type FuncOption func(o *options)
+
+func Build(ctx context.Context, conf Configuration, optsFuncs ...FuncOption) (*controller.Controller, error) {
 	if err := conf.validate(); err != nil {
 		return nil, err
 	}
