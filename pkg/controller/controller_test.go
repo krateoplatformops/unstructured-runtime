@@ -777,7 +777,7 @@ func TestNew_InformerIntegration(t *testing.T) {
 		e, _ := i.(ctrlevent.Event)
 		ctrl.items.Delete(ctrlevent.DigestForEvent(e))
 
-		if e.EventType == ctrlevent.Create &&
+		if e.EventType == ctrlevent.Observe &&
 			e.ObjectRef.Name == item.ObjectRef.Name &&
 			e.ObjectRef.Namespace == item.ObjectRef.Namespace &&
 			e.ObjectRef.Kind == item.ObjectRef.Kind &&
