@@ -52,18 +52,17 @@ func TestOptionSetters(t *testing.T) {
 	WithMetrics(so)(&o)
 	require.Equal(t, so, o.metrics)
 
-	// WithWatchAnnotations - ensure it sets the field (nil vs non-nil)
-	WithWatchAnnotations(nil)(&o)
-	require.Nil(t, o.watchAnnotations)
-
 	// WithWatchAnnotations with a map
 	anns := event.NewAnnotationEvents(event.AnnotationEvent{
 		EventType:  event.Delete,
 		OnAction:   event.OnAny,
 		Annotation: "my-annotation",
 	})
-	WithWatchAnnotations(anns)(&o)
+	WithWatchAnnotations(anns...)(&o)
 	require.True(t, o.watchAnnotations.HasAnnotation("my-annotation"))
+
+	WithActionEvent(event.CRCreated, event.Update)(&o)
+	require.Equal(t, event.Update, o.actionsEvent.GetEventType(event.CRCreated))
 }
 
 func TestConfigurationValidate(t *testing.T) {

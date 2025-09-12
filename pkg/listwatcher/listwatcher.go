@@ -11,10 +11,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-const (
-	CompositionVersionLabel = "krateo.io/composition-version"
-)
-
 type CreateOption struct {
 	Client        dynamic.Interface
 	GVR           schema.GroupVersionResource
