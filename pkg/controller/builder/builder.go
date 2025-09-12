@@ -9,8 +9,6 @@ import (
 	"github.com/krateoplatformops/plumbing/kubeutil/eventrecorder"
 	"github.com/krateoplatformops/plumbing/shortid"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
-	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	metricsserver "github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -66,7 +64,7 @@ func Build(ctx context.Context, conf Configuration, optsFuncs ...FuncOption) (*c
 		return nil, fmt.Errorf("failed to create shortid: %w", err)
 	}
 
-	rec, err := eventrecorder.Create(ctx, conf.Config, "unstructured-runtime", nil)
+	rec, err := eventrecorder.Create(ctx, conf.Config, conf.ProviderName, nil)
 	if err != nil {
 		opts.logger.Error(err, "failed to create event recorder")
 		return nil, fmt.Errorf("failed to create event recorder: %w", err)
@@ -76,15 +74,6 @@ func Build(ctx context.Context, conf Configuration, optsFuncs ...FuncOption) (*c
 	if err != nil {
 		opts.logger.Error(err, "failed to create metrics server")
 		return nil, fmt.Errorf("failed to create metrics server: %w", err)
-	}
-
-	watchAnnotations := ctrlevent.NewAnnotationEvents()
-	watchAnnotations.Add(ctrlevent.Observe, meta.AnnotationKeyReconciliationPaused, ctrlevent.OnAny, false)
-	watchAnnotations.Add(ctrlevent.Create, meta.AnnotationKeyExternalCreatePending, ctrlevent.OnDelete, false)
-	if len(opts.watchAnnotations) > 0 {
-		for _, event := range opts.watchAnnotations {
-			watchAnnotations.Add(event.EventType, event.Annotation, ctrlevent.OnAny, true)
-		}
 	}
 
 	client, err := dynamic.NewForConfig(conf.Config)
@@ -104,8 +93,9 @@ func Build(ctx context.Context, conf Configuration, optsFuncs ...FuncOption) (*c
 		ListWatcher:       opts.listWatcher,
 		GlobalRateLimiter: opts.globalRateLimiter,
 		MetricsServer:     metricsServer,
-		WatchAnnotations:  watchAnnotations,
+		WatchAnnotations:  opts.watchAnnotations,
 		MaxRetries:        opts.maxRetries,
+		ActionsEvent:      opts.actionsEvent,
 	})
 	if err != nil {
 		opts.logger.Error(err, "failed to create controller")

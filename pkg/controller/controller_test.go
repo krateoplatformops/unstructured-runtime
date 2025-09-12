@@ -754,7 +754,7 @@ func TestNew_InformerIntegration(t *testing.T) {
 
 	// Build the same event and digest that the Add handler in New would compute
 	item := ctrlevent.Event{
-		EventType: ctrlevent.Observe,
+		EventType: ctrlevent.Create,
 		ObjectRef: objectref.ObjectRef{
 			APIVersion: obj.GetAPIVersion(),
 			Kind:       obj.GetKind(),
@@ -777,7 +777,7 @@ func TestNew_InformerIntegration(t *testing.T) {
 		e, _ := i.(ctrlevent.Event)
 		ctrl.items.Delete(ctrlevent.DigestForEvent(e))
 
-		if e.EventType == ctrlevent.Observe &&
+		if e.EventType == ctrlevent.Create &&
 			e.ObjectRef.Name == item.ObjectRef.Name &&
 			e.ObjectRef.Namespace == item.ObjectRef.Namespace &&
 			e.ObjectRef.Kind == item.ObjectRef.Kind &&

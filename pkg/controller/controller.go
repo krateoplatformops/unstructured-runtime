@@ -78,6 +78,7 @@ type Options struct {
 	MetricsServer     metricsserver.Server
 	WatchAnnotations  ctrlevent.AnnotationEvents
 	MaxRetries        int
+	ActionsEvent      ctrlevent.ActionsEvent
 }
 
 func (o Options) validate() error {
@@ -120,6 +121,7 @@ type Controller struct {
 	logger         logging.Logger
 	externalClient ExternalClient
 	maxRetries     int
+	actionsEvent   ctrlevent.ActionsEvent
 }
 
 var (
@@ -182,7 +184,7 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 				}
 
 				item := ctrlevent.Event{
-					EventType: ctrlevent.Observe,
+					EventType: opts.ActionsEvent.GetEventType(ctrlevent.CRCreated),
 					ObjectRef: objectref.ObjectRef{
 						APIVersion: el.GetAPIVersion(),
 						Kind:       el.GetKind(),
@@ -241,7 +243,7 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 					log.Debug(fmt.Sprintf("Object %s/%s is being deleted", newUns.GetNamespace(), newUns.GetName()))
 
 					item := ctrlevent.Event{
-						EventType: ctrlevent.Delete,
+						EventType: opts.ActionsEvent.GetEventType(ctrlevent.CRDeleted),
 						ObjectRef: objectref.ObjectRef{
 							APIVersion: newUns.GetAPIVersion(),
 							Kind:       newUns.GetKind(),
@@ -338,7 +340,7 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 				diff := cmp.Diff(newSpec, oldSpec)
 				if len(diff) > 0 {
 					item := ctrlevent.Event{
-						EventType: ctrlevent.Update,
+						EventType: opts.ActionsEvent.GetEventType(ctrlevent.CRUpdated),
 						ObjectRef: objectref.ObjectRef{
 							APIVersion: newUns.GetAPIVersion(),
 							Kind:       newUns.GetKind(),
@@ -368,7 +370,7 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 					}
 				} else {
 					item := ctrlevent.Event{
-						EventType: ctrlevent.Observe,
+						EventType: opts.ActionsEvent.GetEventType(ctrlevent.CRObserved),
 						ObjectRef: objectref.ObjectRef{
 							APIVersion: newUns.GetAPIVersion(),
 							Kind:       newUns.GetKind(),
@@ -380,10 +382,9 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 
 					dig := ctrlevent.DigestForEvent(item)
 
-					if _, loaded := items.Load(dig); !loaded {
-						items.Store(dig, struct{}{})
-						priority := LowPriority
-						time.AfterFunc(opts.ResyncInterval, func() {
+					time.AfterFunc(opts.ResyncInterval, func() {
+						if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
+							priority := LowPriority
 							log.WithValues(
 								"kind", item.ObjectRef.Kind,
 								"apiVersion", item.ObjectRef.APIVersion,
@@ -398,8 +399,9 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 								RateLimited: true,
 								Priority:    priority,
 							}, item)
-						})
-					}
+						}
+					})
+
 				}
 
 			},
@@ -414,7 +416,7 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 				log.Debug(fmt.Sprintf("Deleting object %s/%s", el.GetNamespace(), el.GetName()))
 
 				item := ctrlevent.Event{
-					EventType: ctrlevent.Delete,
+					EventType: opts.ActionsEvent.GetEventType(ctrlevent.CRDeleted),
 					ObjectRef: objectref.ObjectRef{
 						APIVersion: el.GetAPIVersion(),
 						Kind:       el.GetKind(),

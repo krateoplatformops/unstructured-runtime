@@ -4,8 +4,10 @@ import (
 	"time"
 
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	metricsserver "github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"golang.org/x/time/rate"
@@ -33,9 +35,15 @@ type options struct {
 	// If an annotation is present, the corresponding event will be triggered.
 	// This is useful for triggering events based on annotations in the resource.
 	watchAnnotations ctrlevent.AnnotationEvents
+
+	actionsEvent ctrlevent.ActionsEvent
 }
 
 func defaultOptions() options {
+	watchAnnotations := ctrlevent.NewAnnotationEvents()
+	watchAnnotations.Add(ctrlevent.Observe, meta.AnnotationKeyReconciliationPaused, ctrlevent.OnAny, false)
+	watchAnnotations.Add(ctrlevent.Create, meta.AnnotationKeyExternalCreatePending, ctrlevent.OnDelete, false)
+
 	return options{
 		resyncInterval: 3 * time.Minute,
 		logger:         logging.NewNopLogger(),
@@ -45,13 +53,14 @@ func defaultOptions() options {
 			BindAddress: "0",
 		},
 		maxRetries:       5,
-		watchAnnotations: nil,
+		watchAnnotations: watchAnnotations,
 		namespace:        "",
 		globalRateLimiter: workqueue.NewTypedMaxOfRateLimiter(
 			workqueue.NewTypedItemExponentialFailureRateLimiter[any](3*time.Second, 180*time.Second),
 			// 10 qps, 100 bucket size.  This is only for retry speed and its only the overall factor (not per item)
 			&workqueue.TypedBucketRateLimiter[any]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
 		),
+		actionsEvent: ctrlevent.NewDefaultActionsEvent(),
 	}
 }
 
@@ -103,8 +112,19 @@ func WithMaxRetries(r int) func(o *options) {
 	}
 }
 
-func WithWatchAnnotations(a ctrlevent.AnnotationEvents) func(o *options) {
+func WithWatchAnnotations(anns ...ctrlevent.AnnotationEvent) func(o *options) {
 	return func(o *options) {
-		o.watchAnnotations = a
+		if o.watchAnnotations == nil {
+			o.watchAnnotations = ctrlevent.NewAnnotationEvents()
+		}
+		for _, ann := range anns {
+			o.watchAnnotations.Add(ann.EventType, ann.Annotation, ann.OnAction, true)
+		}
+	}
+}
+
+func WithActionEvent(onaction ctrlevent.ActionCustomResource, eventType event.EventType) func(o *options) {
+	return func(o *options) {
+		o.actionsEvent.MutateEvent(onaction, eventType)
 	}
 }
