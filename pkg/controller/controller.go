@@ -121,7 +121,6 @@ type Controller struct {
 	logger         logging.Logger
 	externalClient ExternalClient
 	maxRetries     int
-	actionsEvent   ctrlevent.ActionsEvent
 }
 
 var (
