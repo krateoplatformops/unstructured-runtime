@@ -229,7 +229,6 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
-
 		el, err := tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
@@ -495,6 +494,8 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 		return err
 	}
 
+	log.Debug("Creating external resource", "release name", meta.GetReleaseName(el))
+
 	actionErr := c.externalClient.Create(ctx, el)
 	if actionErr != nil {
 		c.recordEvent(el, event.Warning(reasonCannotCreate, actionCreateExternalResource, actionErr))
@@ -506,13 +507,23 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 		}
 
 		meta.SetExternalCreateFailed(el, time.Now())
+		el, err = tools.Update(ctx, el, tools.UpdateOptions{
+			Pluralizer:    c.pluralizer,
+			DynamicClient: c.dynamicClient,
+		})
+		if err != nil {
+			log.Error(err, "Cannot update managed resource")
+			c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+			return err
+		}
+
 		err = unstructuredtools.SetConditions(el, condition.Creating(), condition.ReconcileError(errors.Wrap(actionErr, errReconcileCreate)))
 		if err != nil {
 			log.Error(err, "Cannot set conditions")
 			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
-		el, err = tools.Update(ctx, el, tools.UpdateOptions{
+		el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
 		})
@@ -680,7 +691,6 @@ func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) 
 			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 			return err
 		}
-
 		el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 			Pluralizer:    c.pluralizer,
 			DynamicClient: c.dynamicClient,
@@ -699,14 +709,13 @@ func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) 
 		return err
 	}
 
-	el.SetFinalizers([]string{})
 	err = unstructuredtools.SetConditions(el, condition.Deleting(), condition.ReconcileSuccess())
 	if err != nil {
 		log.Error(err, "Cannot set conditions")
 		c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
 		return err
 	}
-	el, err = tools.Update(ctx, el, tools.UpdateOptions{
+	el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
 		Pluralizer:    c.pluralizer,
 		DynamicClient: c.dynamicClient,
 	})
@@ -715,6 +724,18 @@ func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) 
 		c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
 		return err
 	}
+
+	el.SetFinalizers([]string{})
+	el, err = tools.Update(ctx, el, tools.UpdateOptions{
+		Pluralizer:    c.pluralizer,
+		DynamicClient: c.dynamicClient,
+	})
+	if err != nil {
+		log.Error(err, "Cannot remove finalizer")
+		c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+		return err
+	}
+
 	log.Info("Successfully requested deletion of external resource")
 	c.recordEvent(el, event.Normal(reasonDeleted, actionDeleteEvent, "Successfully requested deletion of external resource"))
 	return nil

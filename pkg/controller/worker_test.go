@@ -211,6 +211,7 @@ func TestProcessItem_DeleteOrphan(t *testing.T) {
 	obj.SetAnnotations(ann)
 
 	obj, err = opts.Client.Resource(opts.GVR).Namespace(opts.Namespace).Create(context.TODO(), obj, metav1.CreateOptions{})
+	require.NoError(t, err)
 
 	now := metav1.Now()
 	obj.SetDeletionTimestamp(&now)
