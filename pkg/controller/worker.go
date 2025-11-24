@@ -494,8 +494,6 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 		return err
 	}
 
-	log.Debug("Creating external resource", "release name", meta.GetReleaseName(el))
-
 	actionErr := c.externalClient.Create(ctx, el)
 	if actionErr != nil {
 		c.recordEvent(el, event.Warning(reasonCannotCreate, actionCreateExternalResource, actionErr))
