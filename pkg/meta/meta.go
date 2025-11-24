@@ -310,23 +310,6 @@ func IsActionAllowed(o metav1.Object, action string) bool {
 	return p == ManagementPolicyDefault || p == ManagementPolicyObserveDelete
 }
 
-func GetReleaseName(o metav1.Object) string {
-	return o.GetLabels()[ReleaseNameLabel]
-}
-
-// Set the release name as a label on the Composition resource.
-// Release name will be "name" if the annotation has not been already populated.
-func SetReleaseName(o metav1.Object, name string) {
-	mglabels := o.GetLabels()
-	if mglabels == nil {
-		mglabels = make(map[string]string)
-	}
-	if _, ok := mglabels[ReleaseNameLabel]; !ok {
-		mglabels[ReleaseNameLabel] = name
-	}
-	o.SetLabels(mglabels)
-}
-
 // ShouldDelete determines if the external resource will orphaned
 func ShouldDelete(o metav1.Object) bool {
 	mp := o.GetAnnotations()[AnnotationKeyManagementPolicy]
