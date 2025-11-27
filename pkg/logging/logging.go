@@ -94,8 +94,8 @@ type slogLogger struct {
 	log *slog.Logger
 }
 
-func NewSlogLogger(l slog.Logger) Logger {
-	return slogLogger{log: &l}
+func NewSlogLogger(l *slog.Logger) Logger {
+	return slogLogger{log: l}
 }
 
 func (l slogLogger) Info(msg string, keysAndValues ...any) {
