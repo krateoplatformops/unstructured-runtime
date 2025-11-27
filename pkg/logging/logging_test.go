@@ -73,7 +73,7 @@ func TestNewSlogLogger(t *testing.T) {
 		Level: slog.LevelDebug,
 	}))
 
-	logger := NewSlogLogger(*slogger)
+	logger := NewSlogLogger(slogger)
 	if logger == nil {
 		t.Error("NewSlogLogger returned nil")
 	}
@@ -137,7 +137,7 @@ func TestLoggerInterface(t *testing.T) {
 	// Test that all implementations satisfy the Logger interface
 	var _ Logger = NewNopLogger()
 	var _ Logger = NewLogrLogger(logr.Discard())
-	var _ Logger = NewSlogLogger(*slog.Default())
+	var _ Logger = NewSlogLogger(slog.Default())
 }
 
 func parseLogTokens(s string) map[string]string {
@@ -176,7 +176,7 @@ func TestSlogAndLogrOutputsMatch(t *testing.T) {
 	)
 
 	slogger := slog.New(lh1)
-	sl := NewSlogLogger(*slogger)
+	sl := NewSlogLogger(slogger)
 
 	// prepare logr (stdr) -> buf2
 	var buf2 bytes.Buffer

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/krateoplatformops/plumbing/kubeutil/event"
+	"github.com/krateoplatformops/plumbing/shortid"
 	contextutils "github.com/krateoplatformops/unstructured-runtime/pkg/context"
 	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
@@ -126,7 +127,13 @@ func (c *Controller) runWorker(ctx context.Context) {
 			queueWaitDuration = processingStartTime.Sub(ev.QueuedAt)
 		}
 
-		err := c.processItem(ctx, ev)
+		traceId, err := shortid.Generate()
+		if err != nil {
+			runtimeUtil.HandleError(fmt.Errorf("cannot generate trace ID: %v", err))
+			continue
+		}
+		ctx = contextutils.BuildContext(ctx, contextutils.WithLogger(c.logger), contextutils.WithTraceId(traceId))
+		err = c.processItem(ctx, ev)
 
 		// End timing and calculate durations
 		processingEndTime := time.Now()
@@ -146,6 +153,7 @@ func (c *Controller) runWorker(ctx context.Context) {
 			"name", ev.ObjectRef.Name,
 			"namespace", ev.ObjectRef.Namespace,
 			"queuedAt", ev.QueuedAt,
+			"traceId", contextutils.TraceId(ctx, false),
 		).Debug("Event processed",
 			"priority", priority,
 			"type", ev.EventType,
@@ -194,7 +202,7 @@ func (c *Controller) handleErr(err error, obj ctrlevent.Event, priority int) {
 }
 
 func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
-	lg := c.logger
+	lg := contextutils.Logger(ctx).WithValues("traceId", contextutils.TraceId(ctx, false))
 
 	evt, ok := obj.(ctrlevent.Event)
 	if !ok {
@@ -334,10 +342,10 @@ func (c *Controller) processItem(ctx context.Context, obj interface{}) error {
 }
 
 func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef) error {
-	log := contextutils.Logger(ctx).WithValues("event", "observe")
+	log := contextutils.Logger(ctx).WithValues("event", "observe").WithValues("traceId", contextutils.TraceId(ctx, false))
 
 	if c.externalClient == nil {
-		c.logger.Warn("No event handler registered.")
+		log.Warn("No event handler registered.")
 		return nil
 	}
 
@@ -438,7 +446,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 }
 
 func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) error {
-	log := contextutils.Logger(ctx).WithValues("event", "create")
+	log := contextutils.Logger(ctx).WithValues("event", "create").WithValues("traceId", contextutils.TraceId(ctx, false))
 
 	if c.externalClient == nil {
 		log.Warn("No event handler registered.")
@@ -598,7 +606,7 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 }
 
 func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) error {
-	log := contextutils.Logger(ctx).WithValues("event", "update")
+	log := contextutils.Logger(ctx).WithValues("event", "update").WithValues("traceId", contextutils.TraceId(ctx, false))
 	if c.externalClient == nil {
 		log.Warn("No event handler registered.")
 		return nil
@@ -667,7 +675,7 @@ func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) 
 }
 
 func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) error {
-	log := contextutils.Logger(ctx).WithValues("event", "delete")
+	log := contextutils.Logger(ctx).WithValues("event", "delete").WithValues("traceId", contextutils.TraceId(ctx, false))
 	if c.externalClient == nil {
 		log.Warn("No event handler registered.")
 		return nil
