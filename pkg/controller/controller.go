@@ -406,9 +406,31 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 			},
 			DeleteFunc: func(obj interface{}) {
 				log := opts.Logger
+
+				// Attempt to cast the object to *unstructured.Unstructured
 				el, ok := obj.(*unstructured.Unstructured)
 				if !ok {
-					log.Warn("Object is not an unstructured.")
+					// If the cast fails, check if it's a Tombstone (DeletedFinalStateUnknown)
+					tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+					if !ok {
+						log.Warn("Failed to recover object from DeleteFunc: unknown type")
+						return
+					}
+					// Recover the last known state of the object from the tombstone
+					el, ok = tombstone.Obj.(*unstructured.Unstructured)
+					if !ok {
+						log.Warn("Tombstone does not contain an unstructured object")
+						return
+					}
+				}
+
+				if el.GetDeletionTimestamp() == nil {
+					log.WithValues(
+						"name", el.GetName(),
+						"apiVersion", el.GetAPIVersion(),
+						"kind", el.GetKind(),
+						"namespace", el.GetNamespace(),
+					).Info("Object exited controller control without deletion request. Skipping external resource cleanup.")
 					return
 				}
 
