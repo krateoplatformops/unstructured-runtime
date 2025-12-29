@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -97,6 +98,7 @@ func createTestUnstructured(name, namespace string) *unstructured.Unstructured {
 	obj.SetName(name)
 	obj.SetNamespace(namespace)
 	obj.SetResourceVersion("1")
+	obj.SetFinalizers([]string{"test.finalizer.example.org"})
 
 	// Set a simple spec
 	spec := map[string]interface{}{
@@ -409,9 +411,22 @@ func TestInformer_DeleteFunc(t *testing.T) {
 	created, err := opts.Client.Resource(opts.GVR).Namespace(opts.Namespace).Create(context.TODO(), obj, metav1.CreateOptions{})
 	require.NoError(t, err)
 
-	err = opts.Client.Resource(opts.GVR).Namespace(opts.Namespace).Delete(context.TODO(), created.GetName(), metav1.DeleteOptions{})
+	// Created object exists, get for debugging
+	createdObj, err := opts.Client.Resource(opts.GVR).Namespace(opts.Namespace).Get(context.TODO(), created.GetName(), metav1.GetOptions{})
+	b, _ := json.MarshalIndent(createdObj, "", "  ")
+	fmt.Println("Created object:", string(b))
+
+	now := metav1.Now()
+	created.SetDeletionTimestamp(&now)
+
+	// Update the object in the fake client
+	_, err = opts.Client.Resource(opts.GVR).Namespace(opts.Namespace).Update(context.TODO(), created, metav1.UpdateOptions{})
 	require.NoError(t, err)
 
+	// Get the deleted object to pass to DeleteFunc
+	deletedObj, err := opts.Client.Resource(opts.GVR).Namespace(opts.Namespace).Get(context.TODO(), created.GetName(), metav1.GetOptions{})
+	b, _ = json.MarshalIndent(deletedObj, "", "  ")
+	fmt.Println("Deleted object:", string(b))
 	// Build expected Delete event digest
 	item := ctrlevent.Event{
 		EventType: ctrlevent.Delete,
