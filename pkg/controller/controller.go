@@ -324,6 +324,13 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 					}
 				}
 
+				// Check if ResourceVersion changed to distinguish between:
+				// 1. Periodic resync (same ResourceVersion) - should queue Observe
+				// 2. Status-only update (different ResourceVersion, same spec) - should IGNORE
+				// 3. Spec change (different ResourceVersion, different spec) - should queue Update
+				oldResourceVersion := oldUns.GetResourceVersion()
+				newResourceVersion := newUns.GetResourceVersion()
+
 				newSpec, _, err := unstructured.NestedMap(newUns.Object, "spec")
 				if err != nil {
 					log.Error(err, "getting new object spec")
@@ -337,7 +344,9 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 				}
 
 				diff := cmp.Diff(newSpec, oldSpec)
+
 				if len(diff) > 0 {
+					// Spec changed - user-initiated update
 					item := ctrlevent.Event{
 						EventType: opts.ActionsEvent.GetEventType(ctrlevent.CRUpdated),
 						ObjectRef: objectref.ObjectRef{
@@ -358,16 +367,14 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 							"name", item.ObjectRef.Name,
 							"namespace", item.ObjectRef.Namespace,
 							"queuedAt", item.QueuedAt,
-						).Debug("Adding Update event to queue", "priority", HighPriority)
-						// Generally a user event, occurs when a user updates the spec of a resource. We want to process these events as soon as possible, so we add them to the front of the queue.
-						// We use high priority because these are user events that should be processed quickly.
-						// This is a user event, so we want to process it quickly.
+						).Debug("Adding Update event to queue (spec changed)", "priority", HighPriority)
 						queue.AddWithOpts(priorityqueue.AddOpts{
 							RateLimited: false,
 							Priority:    HighPriority,
 						}, item)
 					}
-				} else {
+				} else if oldResourceVersion == newResourceVersion {
+					// Periodic resync from informer - ResourceVersion unchanged
 					item := ctrlevent.Event{
 						EventType: opts.ActionsEvent.GetEventType(ctrlevent.CRObserved),
 						ObjectRef: objectref.ObjectRef{
@@ -381,26 +388,29 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 
 					dig := ctrlevent.DigestForEvent(item)
 
-					time.AfterFunc(opts.ResyncInterval, func() {
-						if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
-							priority := LowPriority
-							log.WithValues(
-								"kind", item.ObjectRef.Kind,
-								"apiVersion", item.ObjectRef.APIVersion,
-								"name", item.ObjectRef.Name,
-								"namespace", item.ObjectRef.Namespace,
-								"queuedAt", item.QueuedAt,
-								"priority", priority,
-							).Debug("Adding Observe event to queue, normal requeue after update with no spec change")
-							// This is a normal requeue after an update with no spec change.This is not a user event.
-							// We use low priority because these events are not urgent and can be processed later.
-							queue.AddWithOpts(priorityqueue.AddOpts{
-								RateLimited: true,
-								Priority:    priority,
-							}, item)
-						}
-					})
-
+					if _, loaded := items.LoadOrStore(dig, struct{}{}); !loaded {
+						log.WithValues(
+							"kind", item.ObjectRef.Kind,
+							"apiVersion", item.ObjectRef.APIVersion,
+							"name", item.ObjectRef.Name,
+							"namespace", item.ObjectRef.Namespace,
+							"queuedAt", item.QueuedAt,
+						).Debug("Adding Observe event to queue (periodic resync)", "priority", LowPriority)
+						queue.AddWithOpts(priorityqueue.AddOpts{
+							RateLimited: false,
+							Priority:    LowPriority,
+						}, item)
+					}
+				} else {
+					// ResourceVersion changed but spec didn't - this is a status-only update from the controller itself
+					// IGNORE to prevent self-triggering loop
+					log.WithValues(
+						"kind", newUns.GetKind(),
+						"name", newUns.GetName(),
+						"namespace", newUns.GetNamespace(),
+						"oldResourceVersion", oldResourceVersion,
+						"newResourceVersion", newResourceVersion,
+					).Debug("Ignoring status-only update")
 				}
 
 			},
