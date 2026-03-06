@@ -64,7 +64,7 @@ func Build(ctx context.Context, conf Configuration, optsFuncs ...FuncOption) (*c
 		return nil, fmt.Errorf("failed to create shortid: %w", err)
 	}
 
-	rec, err := eventrecorder.Create(ctx, conf.Config, conf.ProviderName, nil)
+	rec, err := eventrecorder.CreateWithThrottle(ctx, conf.Config, conf.ProviderName, nil)
 	if err != nil {
 		opts.logger.Error(err, "failed to create event recorder")
 		return nil, fmt.Errorf("failed to create event recorder: %w", err)
