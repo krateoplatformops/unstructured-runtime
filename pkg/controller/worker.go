@@ -190,9 +190,13 @@ func (c *Controller) handleErr(err error, obj ctrlevent.Event, priority int) {
 
 	dig := ctrlevent.DigestForEvent(retryEvent)
 	if _, loaded := c.items.Load(dig); !loaded {
-		c.logger.WithValues("retries", c.queue.NumRequeues(obj)).
+		c.logger.WithValues(
+			"retries", c.queue.NumRequeues(obj),
+			"kind", obj.ObjectRef.Kind,
+			"apiVersion", obj.ObjectRef.APIVersion,
+			"name", obj.ObjectRef.Name,
+			"namespace", obj.ObjectRef.Namespace).
 			Debug("handling event, requequeing", "error", err)
-
 		c.items.Store(dig, struct{}{})
 		c.queue.AddWithOpts(priorityqueue.AddOpts{
 			RateLimited: true, // Always rate limit retries to avoid overwhelming the controller
