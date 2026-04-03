@@ -131,6 +131,7 @@ func createTestOptions() Options {
 		Namespace:         "test-namespace",
 		ResyncInterval:    30 * time.Second,
 		Recorder:          &mockEventRecorder{},
+		ThrottledRecorder: &mockEventRecorder{},
 		Logger:            logging.NewNopLogger(),
 		ListWatcher:       ListWatcherConfiguration{},
 		Pluralizer:        &fakePluralizer{},

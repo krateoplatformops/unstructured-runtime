@@ -71,6 +71,7 @@ type Options struct {
 	Namespace         string
 	ResyncInterval    time.Duration
 	Recorder          event.Recorder
+	ThrottledRecorder event.Recorder
 	Logger            logging.Logger
 	ListWatcher       ListWatcherConfiguration
 	Pluralizer        pluralizer.PluralizerInterface
@@ -110,17 +111,18 @@ func (o Options) validate() error {
 }
 
 type Controller struct {
-	metricsServer  metricsserver.Server
-	pluralizer     pluralizer.PluralizerInterface
-	dynamicClient  dynamic.Interface
-	gvr            schema.GroupVersionResource
-	queue          priorityqueue.PriorityQueue[any]
-	items          *sync.Map
-	informer       cache.Controller
-	recorder       event.Recorder
-	logger         logging.Logger
-	externalClient ExternalClient
-	maxRetries     int
+	metricsServer     metricsserver.Server
+	pluralizer        pluralizer.PluralizerInterface
+	dynamicClient     dynamic.Interface
+	gvr               schema.GroupVersionResource
+	queue             priorityqueue.PriorityQueue[any]
+	items             *sync.Map
+	informer          cache.Controller
+	recorder          event.Recorder
+	throttledRecorder event.Recorder
+	logger            logging.Logger
+	externalClient    ExternalClient
+	maxRetries        int
 }
 
 var (
@@ -474,16 +476,17 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 		},
 	})
 	return &Controller{
-		dynamicClient: opts.Client,
-		gvr:           opts.GVR,
-		items:         items,
-		recorder:      opts.Recorder,
-		logger:        opts.Logger,
-		informer:      informer,
-		queue:         queue,
-		pluralizer:    opts.Pluralizer,
-		metricsServer: opts.MetricsServer,
-		maxRetries:    opts.MaxRetries,
+		dynamicClient:     opts.Client,
+		gvr:               opts.GVR,
+		items:             items,
+		recorder:          opts.Recorder,
+		throttledRecorder: opts.ThrottledRecorder,
+		logger:            opts.Logger,
+		informer:          informer,
+		queue:             queue,
+		pluralizer:        opts.Pluralizer,
+		metricsServer:     opts.MetricsServer,
+		maxRetries:        opts.MaxRetries,
 	}, nil
 }
 

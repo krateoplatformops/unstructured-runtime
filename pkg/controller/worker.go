@@ -776,5 +776,11 @@ func (c *Controller) recordEvent(obj runtime.Object, e event.Event) {
 		c.logger.Debug("Cannot record event, object is nil")
 		return
 	}
-	c.recorder.Event(obj, e)
+
+	if e.Reason == event.Reason(event.TypeNormal) {
+		c.recorder.Event(obj, e)
+		return
+	}
+
+	c.throttledRecorder.Event(obj, e)
 }
