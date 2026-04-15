@@ -18,6 +18,7 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/telemetry"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -73,6 +74,7 @@ type Options struct {
 	Recorder          event.Recorder
 	ThrottledRecorder event.Recorder
 	Logger            logging.Logger
+	Metrics           *telemetry.Metrics
 	ListWatcher       ListWatcherConfiguration
 	Pluralizer        pluralizer.PluralizerInterface
 	GlobalRateLimiter workqueue.TypedRateLimiter[any]
@@ -121,6 +123,7 @@ type Controller struct {
 	recorder          event.Recorder
 	throttledRecorder event.Recorder
 	logger            logging.Logger
+	metrics           *telemetry.Metrics
 	externalClient    ExternalClient
 	maxRetries        int
 }
@@ -156,6 +159,12 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 	queue := priorityqueue.New("controller", func(o *priorityqueue.Opts[any]) {
 		o.RateLimiter = opts.GlobalRateLimiter
 	})
+
+	// Wrap the queue with metrics instrumentation if metrics are available
+	var finalQueue priorityqueue.PriorityQueue[any] = queue
+	if opts.Metrics != nil {
+		finalQueue = NewInstrumentedQueue(queue, opts.Metrics)
+	}
 	items := &sync.Map{}
 
 	lw, err := listwatcher.Create(listwatcher.CreateOption{
@@ -482,8 +491,9 @@ func New(sid *shortid.Shortid, opts Options) (*Controller, error) {
 		recorder:          opts.Recorder,
 		throttledRecorder: opts.ThrottledRecorder,
 		logger:            opts.Logger,
+		metrics:           opts.Metrics,
 		informer:          informer,
-		queue:             queue,
+		queue:             finalQueue,
 		pluralizer:        opts.Pluralizer,
 		metricsServer:     opts.MetricsServer,
 		maxRetries:        opts.MaxRetries,
