@@ -24,11 +24,14 @@ type Config struct {
 	Enabled        bool
 	ServiceName    string
 	ExportInterval time.Duration
+	DeploymentName string // Deployment name for stable resource identification
 }
 
 // Metrics exposes a small set of low-cardinality runtime metrics for
 // unstructured-runtime consumers.
 type Metrics struct {
+	log logging.Logger
+
 	startupSuccess metric.Int64Counter
 	startupFailure metric.Int64Counter
 
@@ -102,8 +105,19 @@ func Setup(ctx context.Context, log logging.Logger, cfg Config) (*Metrics, func(
 		return nil, nil, err
 	}
 
+	// Build resource attributes including deployment name for stable multi-instance identification
+	attrs := []attribute.KeyValue{
+		attribute.String("service.name", serviceName),
+	}
+	if cfg.DeploymentName != "" {
+		attrs = append(attrs,
+			attribute.String("k8s.deployment.name", cfg.DeploymentName),
+			attribute.String("service.instance.id", cfg.DeploymentName),
+		)
+	}
+
 	res, err := resource.Merge(resource.Default(),
-		resource.NewSchemaless(attribute.String("service.name", serviceName)))
+		resource.NewSchemaless(attrs...))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -115,21 +129,23 @@ func Setup(ctx context.Context, log logging.Logger, cfg Config) (*Metrics, func(
 	)
 
 	meter := provider.Meter("github.com/krateoplatformops/unstructured-runtime")
-	metrics, err := newMetrics(meter)
+	metrics, err := newMetrics(meter, log)
 	if err != nil {
 		_ = provider.Shutdown(ctx)
 		return nil, nil, err
 	}
 
 	otel.SetMeterProvider(provider)
-	log.Info("OpenTelemetry metrics initialized")
+	log.Info("OpenTelemetry metrics initialized", "deploymentName", cfg.DeploymentName, "serviceName", serviceName, "exportInterval", exportInterval)
 
 	return metrics, provider.Shutdown, nil
 }
 
-func newMetrics(meter metric.Meter) (*Metrics, error) {
+func newMetrics(meter metric.Meter, log logging.Logger) (*Metrics, error) {
 	var err error
-	m := &Metrics{}
+	m := &Metrics{
+		log: log,
+	}
 
 	if m.startupSuccess, err = meter.Int64Counter("unstructured_runtime.startup.success"); err != nil {
 		return nil, err
