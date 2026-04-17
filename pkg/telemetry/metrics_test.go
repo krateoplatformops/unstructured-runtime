@@ -36,7 +36,7 @@ func TestNewMetricsRecordsData(t *testing.T) {
 		}
 	})
 
-	metrics, err := newMetrics(provider.Meter("github.com/krateoplatformops/unstructured-runtime/test"), logging.NewNopLogger())
+	metrics, err := newMetrics(provider.Meter("github.com/krateoplatformops/unstructured-runtime/test"), logging.NewNopLogger(), "test-deployment")
 	if err != nil {
 		t.Fatalf("newMetrics() returned error: %v", err)
 	}
