@@ -30,7 +30,8 @@ type Config struct {
 // Metrics exposes a small set of low-cardinality runtime metrics for
 // unstructured-runtime consumers.
 type Metrics struct {
-	log logging.Logger
+	log            logging.Logger
+	deploymentName string // For tracking instance identity in exported metrics
 
 	startupSuccess metric.Int64Counter
 	startupFailure metric.Int64Counter
@@ -129,7 +130,7 @@ func Setup(ctx context.Context, log logging.Logger, cfg Config) (*Metrics, func(
 	)
 
 	meter := provider.Meter("github.com/krateoplatformops/unstructured-runtime")
-	metrics, err := newMetrics(meter, log)
+	metrics, err := newMetrics(meter, log, cfg.DeploymentName)
 	if err != nil {
 		_ = provider.Shutdown(ctx)
 		return nil, nil, err
@@ -141,10 +142,11 @@ func Setup(ctx context.Context, log logging.Logger, cfg Config) (*Metrics, func(
 	return metrics, provider.Shutdown, nil
 }
 
-func newMetrics(meter metric.Meter, log logging.Logger) (*Metrics, error) {
+func newMetrics(meter metric.Meter, log logging.Logger, deploymentName string) (*Metrics, error) {
 	var err error
 	m := &Metrics{
-		log: log,
+		log:            log,
+		deploymentName: deploymentName,
 	}
 
 	if m.startupSuccess, err = meter.Int64Counter("unstructured_runtime.startup.success"); err != nil {
@@ -243,12 +245,6 @@ func newMetrics(meter metric.Meter, log logging.Logger) (*Metrics, error) {
 	if m.statusUpdateFailure, err = meter.Int64Counter("unstructured_runtime.status.update.failure"); err != nil {
 		return nil, err
 	}
-	if m.connectDuration, err = meter.Float64Histogram("unstructured_runtime.external.connect.duration_seconds"); err != nil {
-		return nil, err
-	}
-	if m.connectFailure, err = meter.Int64Counter("unstructured_runtime.external.connect.failure"); err != nil {
-		return nil, err
-	}
 
 	_, err = meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
 		observer.ObserveInt64(m.reconcileInFlight, m.reconcileInFlightCount.Load())
@@ -259,6 +255,17 @@ func newMetrics(meter metric.Meter, log logging.Logger) (*Metrics, error) {
 	}
 
 	return m, nil
+}
+
+// instanceAttrs returns metric attributes for instance identification.
+// This enables metrics exported to Prometheus to include service.instance.id as exported_instance.
+func (m *Metrics) instanceAttrs() []attribute.KeyValue {
+	if m == nil || m.deploymentName == "" {
+		return nil
+	}
+	return []attribute.KeyValue{
+		attribute.String("service.instance.id", m.deploymentName),
+	}
 }
 
 func (m *Metrics) IncStartupSuccess(ctx context.Context) {
