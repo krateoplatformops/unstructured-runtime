@@ -10,6 +10,7 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	metricsserver "github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/telemetry"
 	"golang.org/x/time/rate"
 	"k8s.io/client-go/util/workqueue"
 )
@@ -21,6 +22,7 @@ type options struct {
 	logger            logging.Logger
 	listWatcher       controller.ListWatcherConfiguration
 	globalRateLimiter workqueue.TypedRateLimiter[any]
+	metricsRecorder   *telemetry.Metrics
 	metrics           metricsserver.Options
 	// MaxRetries is the maximum number of retries for a failed reconciliation.
 	// If the value is less than or equal to 0, the default value of 5 will be used.
@@ -97,6 +99,12 @@ func WithListWatcher(lw controller.ListWatcherConfiguration) func(o *options) {
 func WithGlobalRateLimiter(rl workqueue.TypedRateLimiter[any]) func(o *options) {
 	return func(o *options) {
 		o.globalRateLimiter = rl
+	}
+}
+
+func WithTelemetryMetrics(m *telemetry.Metrics) func(o *options) {
+	return func(o *options) {
+		o.metricsRecorder = m
 	}
 }
 

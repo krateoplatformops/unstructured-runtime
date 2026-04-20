@@ -112,7 +112,14 @@ func (c *Controller) runWorker(ctx context.Context) {
 			c.queue.Forget(obj)
 			c.queue.Done(obj)
 			runtimeUtil.HandleError(fmt.Errorf("unexpected object in queue: %v", obj))
+			if c.metrics != nil {
+				c.metrics.AddReconcileInFlight(-1)
+			}
 			continue
+		}
+
+		if c.metrics != nil {
+			c.metrics.AddReconcileInFlight(1)
 		}
 
 		dig := ctrlevent.DigestForEvent(ev)
@@ -125,11 +132,17 @@ func (c *Controller) runWorker(ctx context.Context) {
 		var queueWaitDuration time.Duration
 		if !ev.QueuedAt.IsZero() {
 			queueWaitDuration = processingStartTime.Sub(ev.QueuedAt)
+			if c.metrics != nil {
+				c.metrics.RecordQueueWaitDuration(ctx, queueWaitDuration)
+			}
 		}
 
 		traceId, err := shortid.Generate()
 		if err != nil {
 			runtimeUtil.HandleError(fmt.Errorf("cannot generate trace ID: %v", err))
+			if c.metrics != nil {
+				c.metrics.AddReconcileInFlight(-1)
+			}
 			continue
 		}
 		ctx = contextutils.BuildContext(ctx, contextutils.WithLogger(c.logger), contextutils.WithTraceId(traceId))
@@ -144,6 +157,16 @@ func (c *Controller) runWorker(ctx context.Context) {
 			totalDuration = processingEndTime.Sub(ev.QueuedAt)
 		} else {
 			totalDuration = processingDuration
+		}
+		if c.metrics != nil {
+			c.metrics.RecordQueueWorkDuration(ctx, processingDuration)
+			c.metrics.RecordReconcileDuration(ctx, totalDuration)
+			if err == nil {
+				c.metrics.IncReconcileSuccess(ctx)
+			} else {
+				c.metrics.IncReconcileFailure(ctx)
+				c.metrics.IncReconcileErrorRequeue(ctx)
+			}
 		}
 
 		// Enhanced debug logging
@@ -169,6 +192,9 @@ func (c *Controller) runWorker(ctx context.Context) {
 		c.queue.Forget(ev)
 		c.queue.Done(ev)
 		c.handleErr(err, ev, priority)
+		if c.metrics != nil {
+			c.metrics.AddReconcileInFlight(-1)
+		}
 	}
 }
 
@@ -359,7 +385,14 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 		return err
 	}
 
+	start := time.Now()
 	observation, actionErr := c.externalClient.Observe(ctx, el)
+	if c.metrics != nil {
+		c.metrics.RecordObserveDuration(ctx, time.Since(start))
+		if actionErr != nil {
+			c.metrics.IncObserveFailure(ctx)
+		}
+	}
 	if actionErr != nil {
 		c.recordEvent(el, event.Warning(reasonCannotObserve, actionObserveExternalResource, actionErr))
 		log.Error(actionErr, "Cannot observe external resource")
@@ -506,7 +539,14 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 		return err
 	}
 
+	start := time.Now()
 	actionErr := c.externalClient.Create(ctx, el)
+	if c.metrics != nil {
+		c.metrics.RecordCreateDuration(ctx, time.Since(start))
+		if actionErr != nil {
+			c.metrics.IncCreateFailure(ctx)
+		}
+	}
 	if actionErr != nil {
 		c.recordEvent(el, event.Warning(reasonCannotCreate, actionCreateExternalResource, actionErr))
 		log.Error(actionErr, "Cannot create external resource")
@@ -622,7 +662,14 @@ func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) 
 		return err
 	}
 
+	start := time.Now()
 	actionErr := c.externalClient.Update(ctx, el)
+	if c.metrics != nil {
+		c.metrics.RecordUpdateDuration(ctx, time.Since(start))
+		if actionErr != nil {
+			c.metrics.IncUpdateFailure(ctx)
+		}
+	}
 	if actionErr != nil {
 		c.recordEvent(el, event.Warning(reasonCannotUpdate, actionUpdateEvent, actionErr))
 		log.Error(actionErr, "Cannot update external resource")
@@ -690,7 +737,14 @@ func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) 
 		log.Error(err, "Cannot fetch managed resource")
 		return err
 	}
+	start := time.Now()
 	actionErr := c.externalClient.Delete(ctx, el)
+	if c.metrics != nil {
+		c.metrics.RecordDeleteDuration(ctx, time.Since(start))
+		if actionErr != nil {
+			c.metrics.IncDeleteFailure(ctx)
+		}
+	}
 	if actionErr != nil {
 		log.Error(actionErr, "Cannot delete external resource")
 		c.recordEvent(el, event.Warning(reasonCannotDelete, actionDeleteExternalResource, actionErr))
@@ -751,11 +805,21 @@ func (c *Controller) handleDelete(ctx context.Context, ref objectref.ObjectRef) 
 	return nil
 }
 
-func (c *Controller) fetch(ctx context.Context, ref objectref.ObjectRef, clean bool) (*unstructured.Unstructured, error) {
+func (c *Controller) fetch(ctx context.Context, ref objectref.ObjectRef, clean bool) (res *unstructured.Unstructured, err error) {
 	if c.dynamicClient == nil {
 		return nil, fmt.Errorf("dynamic client is not configured")
 	}
-	res, err := c.dynamicClient.Resource(c.gvr).
+	start := time.Now()
+	defer func() {
+		if c.metrics == nil {
+			return
+		}
+		c.metrics.RecordGetDuration(ctx, time.Since(start))
+		if err != nil {
+			c.metrics.IncGetFailure(ctx)
+		}
+	}()
+	res, err = c.dynamicClient.Resource(c.gvr).
 		Namespace(ref.Namespace).
 		Get(ctx, ref.Name, metav1.GetOptions{})
 	if err == nil {

@@ -96,6 +96,7 @@ func Build(ctx context.Context, conf Configuration, optsFuncs ...FuncOption) (*c
 		Recorder:          event.NewAPIRecorder(rec),
 		ThrottledRecorder: event.NewAPIRecorder(throttleRec),
 		Logger:            opts.logger,
+		Metrics:           opts.metricsRecorder,
 		ListWatcher:       opts.listWatcher,
 		GlobalRateLimiter: opts.globalRateLimiter,
 		MetricsServer:     metricsServer,
