@@ -279,16 +279,17 @@ func (c *Controller) handleCreate(ctx context.Context, ref objectref.ObjectRef) 
 	// update to fail if we get a 409 due to a stale version.
 	meta.SetExternalCreatePending(el, time.Now())
 	if el, uerr := resourceCli.Update(ctx, el, metav1.UpdateOptions{}); uerr != nil {
-		log.Debug(errUpdateManaged, "error", err)
-		c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, errors.Wrap(err, errUpdateManaged)))
-		unstructuredtools.SetConditions(el, condition.Creating(), condition.ReconcileError(errors.Wrap(err, errUpdateManaged)))
+		log.Debug(errUpdateManaged, "error", uerr)
+		wrappedErr := errors.Wrap(uerr, errUpdateManaged)
+		c.recorder.Event(el, event.Warning(reasonCannotUpdateManaged, wrappedErr))
+		unstructuredtools.SetConditions(el, condition.Creating(), condition.ReconcileError(wrappedErr))
 
 		_, err := resourceCli.UpdateStatus(context.Background(), el, metav1.UpdateOptions{})
 		if err != nil {
 			log.Debug("Cannot update status", "error", err)
 			return err
 		}
-		return errors.Wrap(uerr, errUpdateManaged)
+		return wrappedErr
 	}
 
 	if meta.IsPaused(el) {
@@ -399,7 +400,7 @@ func (c *Controller) handleUpdate(ctx context.Context, ref objectref.ObjectRef) 
 			return err
 		}
 
-		err = unstructuredtools.SetConditions(e, condition.ReconcileError(errors.Wrap(err, errReconcileUpdate)))
+		err = unstructuredtools.SetConditions(e, condition.ReconcileError(errors.Wrap(actionErr, errReconcileUpdate)))
 		if err != nil {
 			log.Debug("Cannot set condition", "error", err)
 			return err
