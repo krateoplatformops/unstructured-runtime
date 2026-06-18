@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -12,7 +11,6 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/certwatcher/metrics"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
-	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
@@ -96,28 +94,15 @@ func (cw *CertWatcher) GetCertificate(_ *tls.ClientHelloInfo) (*tls.Certificate,
 }
 
 // Start starts the watch on the certificate and key files.
+//
+// The periodic poll below is the baseline mechanism and runs immediately;
+// fsnotify is only an optimization for faster reaction. Adding the fsnotify
+// watches is therefore done in the background and never blocks (or fails) the
+// poll: a slow or failing watch setup must not disable certificate reloading.
 func (cw *CertWatcher) Start(ctx context.Context) error {
 	log := cw.log
-	files := sets.New(cw.certPath, cw.keyPath)
 
-	{
-		var watchErr error
-		if err := wait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Second, true, func(ctx context.Context) (done bool, err error) {
-			for _, f := range files.UnsortedList() {
-				if err := cw.watcher.Add(f); err != nil {
-					watchErr = err
-					return false, nil //nolint:nilerr // We want to keep trying.
-				}
-				// We've added the watch, remove it from the set.
-				files.Delete(f)
-			}
-			return true, nil
-		}); err != nil {
-			return fmt.Errorf("failed to add watches: %w", kerrors.NewAggregate([]error{err, watchErr}))
-		}
-	}
-
-	go cw.Watch()
+	go cw.watchFiles(ctx)
 
 	ticker := time.NewTicker(cw.interval)
 	defer ticker.Stop()
@@ -133,6 +118,34 @@ func (cw *CertWatcher) Start(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// watchFiles registers fsnotify watches for the certificate and key files,
+// retrying until it succeeds or the context is cancelled, then runs the event
+// loop. While the watches are not yet in place the watcher keeps working in
+// poll-only mode (see Start).
+func (cw *CertWatcher) watchFiles(ctx context.Context) {
+	log := cw.log
+	files := sets.New(cw.certPath, cw.keyPath)
+
+	if err := wait.PollUntilContextCancel(ctx, 1*time.Second, true, func(ctx context.Context) (done bool, err error) {
+		for _, f := range files.UnsortedList() {
+			if err := cw.watcher.Add(f); err != nil {
+				log.Debug("waiting to add file watch", "file", f, "error", err.Error())
+				return false, nil //nolint:nilerr // We want to keep trying.
+			}
+			// We've added the watch, remove it from the set.
+			files.Delete(f)
+		}
+		return true, nil
+	}); err != nil {
+		// Context cancelled before the watches were added; the poll loop in
+		// Start remains the active mechanism, so this is not fatal.
+		log.Debug("stopped adding file watches before completion", "error", err.Error())
+		return
+	}
+
+	cw.Watch()
 }
 
 // Watch reads events from the watcher's channel and reacts to changes.
