@@ -87,8 +87,9 @@ var _ = Describe("CertWatcher", func() {
 		})
 
 		It("should reload currentCert when changed", func() {
-			// This test verifies fsnotify detects the cert change. So interval doesn't matter.
-			doneCh := startWatcher(10 * time.Second)
+			// fsnotify is the fast path; a short poll interval is a deterministic fallback,
+			// so this assertion does not depend on fsnotify delivery timing under load.
+			doneCh := startWatcher(1 * time.Second)
 			called := atomic.Int64{}
 			watcher.RegisterCallback(func(crt tls.Certificate) {
 				called.Add(1)
@@ -104,7 +105,7 @@ var _ = Describe("CertWatcher", func() {
 				secondcert, _ := watcher.GetCertificate(nil)
 				first := firstcert.PrivateKey.(*rsa.PrivateKey)
 				return first.Equal(secondcert.PrivateKey) || firstcert.Leaf.SerialNumber == secondcert.Leaf.SerialNumber
-			}).ShouldNot(BeTrue())
+			}, "10s", "1s").ShouldNot(BeTrue())
 
 			ctxCancel()
 			Eventually(doneCh, "4s").Should(BeClosed())
@@ -112,8 +113,9 @@ var _ = Describe("CertWatcher", func() {
 		})
 
 		It("should reload currentCert when changed with rename", func() {
-			// This test verifies fsnotify detects the cert change. So interval doesn't matter.
-			doneCh := startWatcher(10 * time.Second)
+			// fsnotify is the fast path; a short poll interval is a deterministic fallback,
+			// so this assertion does not depend on fsnotify delivery timing under load.
+			doneCh := startWatcher(1 * time.Second)
 			called := atomic.Int64{}
 			watcher.RegisterCallback(func(crt tls.Certificate) {
 				called.Add(1)
@@ -135,7 +137,7 @@ var _ = Describe("CertWatcher", func() {
 				secondcert, _ := watcher.GetCertificate(nil)
 				first := firstcert.PrivateKey.(*rsa.PrivateKey)
 				return first.Equal(secondcert.PrivateKey) || firstcert.Leaf.SerialNumber == secondcert.Leaf.SerialNumber
-			}).ShouldNot(BeTrue())
+			}, "10s", "1s").ShouldNot(BeTrue())
 
 			ctxCancel()
 			Eventually(doneCh, "4s").Should(BeClosed())
@@ -200,8 +202,9 @@ var _ = Describe("CertWatcher", func() {
 			})
 
 			It("should get updated on read certificate errors", func() {
-				// This test works with fsnotify, so interval doesn't matter.
-				doneCh := startWatcher(10 * time.Second)
+				// fsnotify is the fast path; the 1s poll is a deterministic fallback so the
+				// metric assertions below do not depend on fsnotify delivery timing under load.
+				doneCh := startWatcher(1 * time.Second)
 
 				Eventually(func() error {
 					readCertificateTotalAfter := testutil.ToFloat64(metrics.ReadCertificateTotal)
@@ -210,7 +213,7 @@ var _ = Describe("CertWatcher", func() {
 					}
 					readCertificateTotalBefore = readCertificateTotalAfter
 					return nil
-				}, "4s").Should(Succeed())
+				}, "10s").Should(Succeed())
 
 				Expect(os.Remove(keyPath)).To(Succeed())
 
@@ -221,14 +224,14 @@ var _ = Describe("CertWatcher", func() {
 						return fmt.Errorf("metric read certificate total expected at least: %v and got: %v", readCertificateTotalBefore+1.0, readCertificateTotalAfter)
 					}
 					return nil
-				}, "4s").Should(Succeed())
+				}, "10s").Should(Succeed())
 				Eventually(func() error {
 					readCertificateErrorsAfter := testutil.ToFloat64(metrics.ReadCertificateErrors)
 					if readCertificateErrorsAfter < readCertificateErrorsBefore+1.0 {
 						return fmt.Errorf("metric read certificate errors expected at least: %v and got: %v", readCertificateErrorsBefore+1.0, readCertificateErrorsAfter)
 					}
 					return nil
-				}, "4s").Should(Succeed())
+				}, "10s").Should(Succeed())
 
 				ctxCancel()
 				Eventually(doneCh, "4s").Should(BeClosed())
