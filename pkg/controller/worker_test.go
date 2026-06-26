@@ -279,6 +279,112 @@ func TestHandleObserve_QueuesCreateAndUpdateAndReturnsError(t *testing.T) {
 	require.Equal(t, observeErr, err)
 }
 
+// TestHandleObserve_ManagementPolicyGatesCreateAndUpdate verifies that the
+// management-policy annotation suppresses the create/update events that
+// handleObserve would otherwise enqueue, mirroring provider-runtime's
+// ShouldCreate/ShouldUpdate gating.
+func TestHandleObserve_ManagementPolicyGatesCreateAndUpdate(t *testing.T) {
+	cases := []struct {
+		name             string
+		managementPolicy string
+		observeExists    bool
+		observeUpToDate  bool
+		wantEnqueued     bool
+		wantEventType    ctrlevent.EventType
+	}{
+		{
+			name:             "observe blocks create",
+			managementPolicy: meta.ManagementPolicyObserve,
+			observeExists:    false,
+			wantEnqueued:     false,
+		},
+		{
+			name:             "observe blocks update",
+			managementPolicy: meta.ManagementPolicyObserve,
+			observeExists:    true,
+			observeUpToDate:  false,
+			wantEnqueued:     false,
+		},
+		{
+			name:             "observe-delete blocks create",
+			managementPolicy: meta.ManagementPolicyObserveDelete,
+			observeExists:    false,
+			wantEnqueued:     false,
+		},
+		{
+			name:             "observe-delete blocks update",
+			managementPolicy: meta.ManagementPolicyObserveDelete,
+			observeExists:    true,
+			observeUpToDate:  false,
+			wantEnqueued:     false,
+		},
+		{
+			name:             "observe-create-update allows create",
+			managementPolicy: meta.ManagementPolicyObserveCreateUpdate,
+			observeExists:    false,
+			wantEnqueued:     true,
+			wantEventType:    ctrlevent.Create,
+		},
+		{
+			name:             "observe-create-update allows update",
+			managementPolicy: meta.ManagementPolicyObserveCreateUpdate,
+			observeExists:    true,
+			observeUpToDate:  false,
+			wantEnqueued:     true,
+			wantEventType:    ctrlevent.Update,
+		},
+		{
+			name:             "default (no annotation) allows create",
+			managementPolicy: "",
+			observeExists:    false,
+			wantEnqueued:     true,
+			wantEventType:    ctrlevent.Create,
+		},
+		{
+			name:             "default (no annotation) allows update",
+			managementPolicy: "",
+			observeExists:    true,
+			observeUpToDate:  false,
+			wantEnqueued:     true,
+			wantEventType:    ctrlevent.Update,
+		},
+	}
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sid, err := shortid.New(1, shortid.DefaultABC, 2342)
+			require.NoError(t, err)
+			opts := createTestOptions()
+			ctrl, err := New(sid, opts)
+			require.NoError(t, err)
+
+			obj := createTestUnstructured(fmt.Sprintf("mp-%d", i), opts.Namespace)
+			if tc.managementPolicy != "" {
+				obj.SetAnnotations(map[string]string{meta.AnnotationKeyManagementPolicy: tc.managementPolicy})
+			}
+			_, err = opts.Client.Resource(opts.GVR).Namespace(opts.Namespace).Create(context.TODO(), obj, metav1.CreateOptions{})
+			require.NoError(t, err)
+
+			ctrl.SetExternalClient(&fakeExternalClient{ObserveExists: tc.observeExists, ObserveUpToDate: tc.observeUpToDate})
+			ref := objectref.ObjectRef{APIVersion: obj.GetAPIVersion(), Kind: obj.GetKind(), Name: obj.GetName(), Namespace: obj.GetNamespace()}
+			require.NoError(t, ctrl.handleObserve(context.TODO(), ref))
+
+			if !tc.wantEnqueued {
+				require.Equal(t, 0, ctrl.queue.Len(), "management policy %q should suppress the event", tc.managementPolicy)
+				return
+			}
+
+			require.Equal(t, 1, ctrl.queue.Len(), "expected exactly one event to be enqueued")
+			item, _, _ := ctrl.queue.GetWithPriority()
+			ev, ok := item.(ctrlevent.Event)
+			require.True(t, ok)
+			require.Equal(t, tc.wantEventType, ev.EventType)
+			ctrl.queue.Done(item)
+			ctrl.queue.Forget(item)
+		})
+	}
+}
+
 func TestHandleCreate_SuccessAndFailure_SetAnnotationsAndConditions(t *testing.T) {
 	sid, err := shortid.New(1, shortid.DefaultABC, 2342)
 	require.NoError(t, err)

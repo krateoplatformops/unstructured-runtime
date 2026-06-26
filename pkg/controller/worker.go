@@ -428,7 +428,14 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 		return err
 	}
 
-	if !observation.ResourceExists {
+	// The pending create/update is gated by the resource's management policy
+	// (krateo.io/management-policy), mirroring provider-runtime: a create only
+	// happens when meta.ShouldCreate is true, an update only when
+	// meta.ShouldUpdate is true. When the policy disallows the pending action
+	// (e.g. "observe", "observe-delete") we fall through to the success/no-op
+	// path instead of enqueueing it. Delete is gated separately via
+	// meta.ShouldDelete in processNextItem.
+	if !observation.ResourceExists && meta.ShouldCreate(el) {
 		item := ctrlevent.Event{
 			EventType: ctrlevent.Create,
 			ObjectRef: objectref.ObjectRef{
@@ -444,7 +451,7 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 			Priority:    HighPriority,
 		}, item)
 		return nil
-	} else if !observation.ResourceUpToDate {
+	} else if observation.ResourceExists && !observation.ResourceUpToDate && meta.ShouldUpdate(el) {
 		item := ctrlevent.Event{
 			EventType: ctrlevent.Update,
 			ObjectRef: objectref.ObjectRef{
@@ -460,23 +467,32 @@ func (c *Controller) handleObserve(ctx context.Context, ref objectref.ObjectRef)
 			Priority:    HighPriority,
 		}, item)
 		return nil
+	}
+
+	// Either the resource is up to date, or the pending create/update is not
+	// allowed by the management policy. In all cases this is a no-op success.
+	if !observation.ResourceExists && !meta.ShouldCreate(el) {
+		log.Debug("Resource does not exist but creation is not allowed by the management policy; skipping create")
+	} else if observation.ResourceExists && !observation.ResourceUpToDate && !meta.ShouldUpdate(el) {
+		log.Debug("Resource is not up to date but update is not allowed by the management policy; skipping update")
 	} else {
-		err = unstructuredtools.SetConditions(el, condition.ReconcileSuccess())
-		if err != nil {
-			log.Error(err, "Cannot set condition")
-			c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
-			return err
-		}
-		el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
-			Pluralizer:    c.pluralizer,
-			DynamicClient: c.dynamicClient,
-		})
-		if err != nil {
-			log.Error(err, "Cannot update status")
-			c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
-			return err
-		}
 		log.Info("External resource is up to date")
+	}
+
+	err = unstructuredtools.SetConditions(el, condition.ReconcileSuccess())
+	if err != nil {
+		log.Error(err, "Cannot set condition")
+		c.recordEvent(el, event.Warning(reasonCannotSetConditions, actionUpdateManagedResource, err))
+		return err
+	}
+	el, err = tools.UpdateStatus(ctx, el, tools.UpdateOptions{
+		Pluralizer:    c.pluralizer,
+		DynamicClient: c.dynamicClient,
+	})
+	if err != nil {
+		log.Error(err, "Cannot update status")
+		c.recordEvent(el, event.Warning(reasonCannotUpdateManaged, actionUpdateManagedResource, err))
+		return err
 	}
 
 	return nil
